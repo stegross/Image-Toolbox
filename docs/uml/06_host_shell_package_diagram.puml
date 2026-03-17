@@ -1,0 +1,98 @@
+@startuml host_shell_package_diagram
+!theme plain
+title Host Shell – Package Diagram (Project Structure)
+
+skinparam shadowing false
+skinparam defaultFontName Arial
+skinparam defaultFontSize 11
+skinparam packageStyle rectangle
+
+package "vi-toolbox" as root {
+
+    package "app" as app_pkg {
+
+        package "core" as core_pkg {
+            artifact "application.py" as app_mod
+            artifact "logging.py" as log_mod
+            artifact "roles.py" as roles_mod
+            artifact "config.py" as config_mod
+        }
+
+        package "shell" as shell_pkg {
+            artifact "main_window.py" as mw_mod
+            artifact "docking_manager.py" as dock_mod
+            artifact "navigation.py" as nav_mod
+            artifact "layout.py" as layout_mod
+        }
+
+        package "plugin" as plugin_pkg {
+            artifact "base.py" as base_mod
+            note right of base_mod
+              Defines IToolPlugin (abstract)
+              and IBaseToolPlugin (abstract).
+            end note
+            artifact "registry.py" as registry_mod
+            note right of registry_mod
+              Static imports & registration:
+              from app.tools.base.image_viewer import ImageViewer
+              from app.tools.base.file_explorer import FileExplorer
+              ...
+              ToolRegistry.register(ImageViewer)
+              ToolRegistry.register(FileExplorer)
+              ...
+            end note
+        }
+
+        package "tools" as tools_pkg {
+            package "base" as base_pkg {
+                package "image_viewer" as iv_pkg {
+                    artifact "viewer.py" as iv_main
+                }
+                package "file_explorer" as fe_pkg {
+                    artifact "explorer.py" as fe_main
+                }
+                package "log_viewer" as lv_pkg {
+                    artifact "viewer.py" as lv_main
+                }
+            }
+            package "extensions" as ext_pkg {
+                package "identification_tool" as id_pkg {
+                    artifact "tool.py" as id_main
+                    artifact "ocr_pipeline.py" as id_ocr
+                    artifact "config.py" as id_conf
+                }
+            }
+        }
+
+        artifact "__main__.py" as main_entry
+    }
+
+    package "tests" as tests_pkg {
+        artifact "test_tool_registry.py"
+        artifact "test_layout_persistence.py"
+        artifact "test_image_viewer.py"
+        artifact "test_identification_tool.py"
+    }
+
+    artifact "noxfile.py" as nox
+    artifact "pyproject.toml" as pyproject
+    artifact "README.md" as readme
+
+    note bottom of nox
+      REQ-EC-012: nox -s build
+      REQ-EC-013: python -m app
+    end note
+}
+
+' Dependencies between packages
+shell_pkg ..> plugin_pkg : uses
+plugin_pkg ..> tools_pkg : imports statically
+shell_pkg ..> core_pkg : uses
+app_mod ..> shell_pkg : creates
+app_mod ..> plugin_pkg : initializes registry
+main_entry ..> app_mod : launches
+
+base_pkg ..> plugin_pkg : implements\nIBaseToolPlugin
+ext_pkg ..> plugin_pkg : implements\nIToolPlugin
+
+@enduml

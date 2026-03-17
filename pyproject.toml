@@ -1,0 +1,59 @@
+[project]
+name = "vi-toolbox"
+version = "0.1.0"
+description = "Extensible desktop toolbox for visual inspection postprocessing of semiconductor chip images."
+requires-python = ">=3.12"
+license = {text = "LGPL-3.0-or-later"}
+
+# Runtime dependencies — what the application needs to run
+dependencies = [
+    "PySide6>=6.7,<7",
+    "PySide6-QtAds>=4.3,<5",
+]
+
+# Optional dependency groups — installed only when needed
+[project.optional-dependencies]
+# Development tools: linting, formatting, testing, build automation
+dev = [
+    "nox>=2024.4",
+    "pytest>=8.0",
+    "pytest-qt>=4.4",      # Qt widget testing helpers for pytest
+    "ruff>=0.5",           # Linter + formatter (replaces flake8, black, isort)
+]
+
+# Entry point: allows "python -m app" to launch the application (REQ-EC-013)
+[project.scripts]
+vi-toolbox = "app.__main__:main"
+
+# ─── Build system ──────────────────────────────────────────────────────────
+[build-system]
+requires = ["setuptools>=68", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+# ─── Ruff (linter + formatter) ─────────────────────────────────────────────
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort (import sorting)
+    "N",    # pep8-naming
+    "D",    # pydocstyle (docstring checks)
+    "UP",   # pyupgrade (modern Python syntax)
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"   # NumPy docstring convention (REQ-EC-006)
+
+# ─── pytest ────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+qt_api = "pyside6"     # Tell pytest-qt to use PySide6

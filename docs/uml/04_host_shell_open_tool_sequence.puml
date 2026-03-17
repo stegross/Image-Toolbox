@@ -1,0 +1,79 @@
+@startuml host_shell_open_tool_sequence
+!theme plain
+title Host Shell – Open Tool Sequence
+
+skinparam shadowing false
+skinparam defaultFontName Arial
+skinparam defaultFontSize 11
+skinparam sequenceMessageAlign center
+
+actor User as user
+participant "NavigationBar" as nav
+participant "MainWindow" as mw
+participant "ToolRegistry" as registry
+participant "RoleManager" as roles
+participant "IToolPlugin" as plugin
+participant "DockingManager" as dock
+participant "ConfigManager" as config
+participant "Logging" as log
+
+user -> nav : clicks tool button
+
+nav -> mw : on_tool_selected(name)
+activate mw
+
+mw -> registry : get_tool(name)
+activate registry
+registry --> mw : tool class
+deactivate registry
+
+mw -> registry : is_instantiated(name)
+activate registry
+
+alt tool already open AND not allow_multiple_instances
+    registry --> mw : true
+    mw -> dock : focus_widget(name)
+    note right : REQ-HS-002:\nPrevent multiple instances\n(unless IBaseToolPlugin\nor explicitly allowed)
+    mw --> user : existing dock focused
+else tool not yet open OR multiple instances allowed
+    registry --> mw : false (or multiple allowed)
+    deactivate registry
+
+    mw -> roles : has_permission(tool.name)
+    activate roles
+    alt permission denied
+        roles --> mw : false
+        mw -> log : warn("Access denied")
+        mw --> user : show access denied message
+    else permission granted
+        roles --> mw : true
+        deactivate roles
+
+        mw -> config : get_tool_config(name)
+        activate config
+        config --> mw : tool config dict
+        deactivate config
+
+        mw -> plugin : create_widget(parent)
+        activate plugin
+        plugin --> mw : QWidget
+        deactivate plugin
+
+        mw -> dock : add_tool_widget(name, widget,\n\tclosable=tool.closable)
+        activate dock
+        dock --> mw : CDockWidget
+        deactivate dock
+
+        mw -> registry : set_instance(name, widget)
+
+        mw -> plugin : on_activate()
+
+        mw -> log : info("Tool opened: {name}")
+
+        mw --> user : tool visible in dock
+    end
+end
+
+deactivate mw
+
+@enduml

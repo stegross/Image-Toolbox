@@ -1,0 +1,25 @@
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Tool caches
+.nox/
+.pytest_cache/
+.ruff_cache/
+
+# User-specific app data written at runtime
+.vi_toolbox/
+
+# IDE
+.vscode/
+.idea/

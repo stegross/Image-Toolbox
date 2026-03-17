@@ -1,0 +1,113 @@
+@startuml host_shell_startup_sequence
+!theme plain
+title Host Shell – Startup Sequence
+
+skinparam shadowing false
+skinparam defaultFontName Arial
+skinparam defaultFontSize 11
+skinparam sequenceMessageAlign center
+
+actor User as user
+participant "Application" as app
+participant "Logging\nSystem" as logging
+participant "RoleManager" as roles
+participant "ConfigManager" as config
+participant "ToolRegistry" as registry
+participant "MainWindow" as mw
+participant "DockingManager" as dock
+participant "NavigationBar" as nav
+participant "LayoutPersistence" as layout
+
+== Initialization Phase ==
+
+user -> app : launch (python -m app)
+activate app
+
+app -> logging : initialize_logging()
+activate logging
+logging --> app : Logger ready
+deactivate logging
+
+app -> roles : check_roles()
+activate roles
+roles -> roles : query_windows_account()
+roles --> app : Role determined
+deactivate roles
+
+app -> config : initialize()
+activate config
+config -> config : load config directory
+config --> app : ConfigManager ready
+deactivate config
+
+== Tool Registration (static, build-time defined) ==
+
+app -> registry : All tool classes already\nstatically registered
+note right
+  No runtime discovery.
+  Tool imports and register()
+  calls are defined in
+  the registry module.
+end note
+
+== UI Creation Phase ==
+
+app -> mw : create & initialize()
+activate mw
+
+mw -> dock : initialize DockManager
+activate dock
+dock --> mw : DockManager ready
+deactivate dock
+
+mw -> nav : build_navigation()
+activate nav
+nav -> registry : get_all_categories()
+registry --> nav : categories
+nav -> nav : create category tabs\nwith tool buttons
+nav --> mw : NavigationBar ready
+deactivate nav
+
+mw -> layout : load()
+activate layout
+alt saved layout exists
+    layout --> mw : QByteArray state
+    mw -> dock : restore_state(state)
+    note right : REQ-HS-007:\nLayout restored\nfrom previous session
+else no saved layout
+    layout --> mw : None
+    note right : First launch:\nuse default layout
+end
+deactivate layout
+
+== Open Base Tools ==
+
+mw -> registry : get_base_tools()
+activate registry
+registry --> mw : list[IBaseToolPlugin]
+deactivate registry
+
+loop for each base tool
+    mw -> mw : open_tool(base_tool.name)
+    note right
+      IBaseToolPlugin:
+      auto_open_on_startup = True
+      closable = False
+    end note
+end
+
+mw --> app : MainWindow ready
+deactivate mw
+
+app -> mw : show()
+
+== Ready ==
+
+app --> user : GUI visible & interactive
+
+note over app
+  REQ-HS-010: Total startup
+  shall not exceed 1 minute.
+end note
+
+@enduml

@@ -1,0 +1,136 @@
+"""Application lifecycle: bootstraps all subsystems and starts the event loop."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication
+
+from app.core.config import ConfigManager
+from app.core.logging import initialize_logging
+from app.core.roles import RoleManager
+from app.plugin.registry import ToolRegistry
+from app.shell.layout import LayoutPersistence
+from app.shell.main_window import MainWindow
+
+# User-specific data directory for configs, logs, and layout state
+_APP_DATA_DIR = Path.home() / ".vi_toolbox"
+
+
+class Application:
+    """Bootstraps and runs the VI-Toolbox application.
+
+    Initialises all subsystems in the correct order (logging → roles →
+    config → UI) and then hands control to the Qt event loop.
+
+    Examples
+    --------
+    Launch from the command line::
+
+        python -m app
+    """
+
+    def run(self) -> int:
+        """Initialise all subsystems, show the window, and enter the event loop.
+
+        Returns
+        -------
+        int
+            Exit code returned by :meth:`QApplication.exec`.
+        """
+        qt_app = self._create_qt_app()
+
+        self._initialize_logging()
+        role_manager = self._check_roles()
+        config_manager = self._initialize_config()
+        tool_registry = ToolRegistry()
+
+        layout_persistence = LayoutPersistence(state_file=_APP_DATA_DIR / "layout.state")
+
+        main_window = self._create_main_window(
+            tool_registry, role_manager, config_manager, layout_persistence
+        )
+        main_window.show()
+
+        return qt_app.exec()
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _create_qt_app(self) -> QApplication:
+        """Create and configure the :class:`QApplication` instance.
+
+        Returns
+        -------
+        QApplication
+            Configured application instance.
+        """
+        app = QApplication.instance()
+        if app is None:
+            app = QApplication(sys.argv)
+
+        # High-DPI scaling is enabled by default in Qt6 / PySide6.
+        # Use PassThrough rounding so fractional scale factors are exact.
+        app.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+        app.setApplicationName("VI - Toolbox")
+        app.setApplicationVersion("0.1.0")
+        return app  # type: ignore[return-value]
+
+    def _initialize_logging(self) -> None:
+        """Set up the application-wide logging system (REQ-HS-017)."""
+        initialize_logging(log_dir=_APP_DATA_DIR / "logs")
+
+    def _check_roles(self) -> RoleManager:
+        """Resolve the current user's role (REQ-HS-013).
+
+        Returns
+        -------
+        RoleManager
+            Initialised role manager.
+        """
+        return RoleManager(config_dir=_APP_DATA_DIR / "config")
+
+    def _initialize_config(self) -> ConfigManager:
+        """Initialise per-tool configuration management (REQ-HS-009).
+
+        Returns
+        -------
+        ConfigManager
+            Initialised config manager.
+        """
+        return ConfigManager(config_dir=_APP_DATA_DIR / "config")
+
+    def _create_main_window(
+        self,
+        tool_registry: ToolRegistry,
+        role_manager: RoleManager,
+        config_manager: ConfigManager,
+        layout_persistence: LayoutPersistence,
+    ) -> MainWindow:
+        """Instantiate and return the main application window.
+
+        Parameters
+        ----------
+        tool_registry : ToolRegistry
+            Shared registry instance.
+        role_manager : RoleManager
+            Initialised role manager.
+        config_manager : ConfigManager
+            Initialised config manager.
+        layout_persistence : LayoutPersistence
+            Layout state handler.
+
+        Returns
+        -------
+        MainWindow
+            Ready-to-show main window.
+        """
+        return MainWindow(
+            tool_registry=tool_registry,
+            role_manager=role_manager,
+            config_manager=config_manager,
+            layout_persistence=layout_persistence,
+        )
