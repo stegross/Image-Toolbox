@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
 
-from PySide6.QtCore import Qt
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QMainWindow, QToolBar, QWidget
+from PySide6.QtWidgets import QMainWindow, QWidget
+from PySide6QtAds import CDockManager
 
 from app.core.config import ConfigManager
 from app.core.roles import RoleManager
@@ -14,8 +16,11 @@ from app.plugin.registry import ToolRegistry
 from app.shell.docking_manager import DockingManager
 from app.shell.layout import LayoutPersistence
 from app.shell.navigation import NavigationBar
+from app.shell.ui.ui_main_window import Ui_MainWindow
 
 _logger = logging.getLogger("vi_toolbox.shell.main_window")
+
+_LOG_DIR = Path.home() / ".vi_toolbox" / "logs"
 
 
 class MainWindow(QMainWindow):
@@ -54,39 +59,39 @@ class MainWindow(QMainWindow):
         self._config_manager = config_manager
         self._layout_persistence = layout_persistence
 
-        self._docking_manager = DockingManager(self)
-        self._nav_bar = NavigationBar(self._tool_registry, self)
-
         self.initialize()
 
     def initialize(self) -> None:
         """Build the UI, restore layout, and open base tools.
 
-        Called once by :meth:`__init__`.  The sequence follows the startup
-        diagram:
+        Called once by :meth:`__init__`.  Sequence:
 
-        1. Configure window properties.
-        2. Embed navigation bar as a non-movable toolbar.
-        3. Set the dock manager as the central widget.
-        4. Restore previously saved layout (if any).
+        1. Set Qt ADS config flags (must happen before ``CDockManager`` is
+           created inside ``setupUi``).
+        2. Load the ``.ui`` file — creates the ``CDockManager`` and toolbar.
+        3. Wrap the dock manager and build the navigation bar.
+        4. Restore previously saved layout (REQ-HS-007).
         5. Open all base tools automatically.
         """
-        self.setWindowTitle("VI - Toolbox")
-        self.resize(1280, 800)
+        # Config flags must be set before CDockManager is instantiated
+        CDockManager.setConfigFlag(CDockManager.eConfigFlag.DockAreaHasUndockButton, False)
+        CDockManager.setConfigFlag(CDockManager.eConfigFlag.DockAreaHasTabsMenuButton, False)
+        CDockManager.setConfigFlag(CDockManager.eConfigFlag.FocusHighlighting, True)
 
-        # Navigation bar as a non-movable toolbar above the dock area
-        nav_toolbar = QToolBar("Navigation", self)
-        nav_toolbar.setObjectName("NavigationToolBar")
-        nav_toolbar.setMovable(False)
-        nav_toolbar.setFloatable(False)
-        nav_toolbar.addWidget(self._nav_bar)
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, nav_toolbar)
+        # Load the .ui file (creates dockManager and navigationToolBar)
+        self._ui = Ui_MainWindow()
+        self._ui.setupUi(self)
 
-        # Dock manager occupies the central widget area
-        self.setCentralWidget(self._docking_manager.get_widget())
+        # Wrap the CDockManager created by setupUi
+        self._docking_manager = DockingManager(self._ui.dockManager)
 
-        # Connect navigation bar signal
+        # Build NavigationBar and embed it in the toolbar from the .ui
+        self._nav_bar = NavigationBar(self._tool_registry, self)
+        self._ui.navigationToolBar.addWidget(self._nav_bar)
+
+        # Wire signals
         self._nav_bar.tool_selected.connect(self.open_tool)
+        self._nav_bar.action_triggered.connect(self._handle_action)
 
         # Restore layout from previous session (REQ-HS-007)
         self.restore_layout()
@@ -105,7 +110,8 @@ class MainWindow(QMainWindow):
         Parameters
         ----------
         name : str
-            Tool name as registered in :class:`~app.plugin.registry.ToolRegistry`.
+            Tool name as registered in
+            :class:`~app.plugin.registry.ToolRegistry`.
         """
         try:
             tool_cls = self._tool_registry.get_tool(name)
@@ -125,7 +131,6 @@ class MainWindow(QMainWindow):
             _logger.warning("Access denied: user has no permission for '%s'.", name)
             return
 
-        # Instantiate and dock the tool
         tool_instance = tool_cls()
         widget = tool_instance.create_widget(self)
         closable = getattr(tool_cls, "closable", True)
@@ -188,3 +193,19 @@ class MainWindow(QMainWindow):
         for tool_cls in self._tool_registry.get_base_tools():
             if getattr(tool_cls, "auto_open_on_startup", False):
                 self.open_tool(tool_cls.name)
+
+    def _handle_action(self, action: str) -> None:
+        """Dispatch static navigation bar actions.
+
+        Parameters
+        ----------
+        action : str
+            Action key emitted by :class:`~app.shell.navigation.NavigationBar`.
+        """
+        if action == "open_log_folder":
+            _LOG_DIR.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(_LOG_DIR))  # Windows only (REQ-EC-004)
+        elif action == "about":
+            _logger.info("About: VI-Toolbox v0.1.0")
+        else:
+            _logger.warning("Unknown action: %s", action)

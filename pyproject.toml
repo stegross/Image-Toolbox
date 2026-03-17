@@ -38,6 +38,8 @@ include = ["app*"]
 target-version = "py312"
 line-length = 100
 src = ["app", "tests"]
+# Exclude generated files from Qt Designer (.ui compilation output)
+exclude = ["app/shell/ui/ui_*.py"]
 
 [tool.ruff.lint]
 select = [

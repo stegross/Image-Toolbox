@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QByteArray
-from PySide6.QtWidgets import QMainWindow, QWidget
+from PySide6.QtWidgets import QWidget
 from PySide6QtAds import CDockManager, CDockWidget, DockWidgetArea
-
-if TYPE_CHECKING:
-    pass
 
 _logger = logging.getLogger("vi_toolbox.shell.docking_manager")
 
@@ -18,36 +14,19 @@ _logger = logging.getLogger("vi_toolbox.shell.docking_manager")
 class DockingManager:
     """Manages docked tool widgets using Qt Advanced Docking System.
 
-    Wraps :class:`CDockManager` to provide a simplified interface for
-    adding, removing, and focusing tool widgets, and for serialising the
-    layout state.
+    Wraps an existing :class:`CDockManager` instance (typically created by
+    ``Ui_MainWindow.setupUi``) to provide a simplified interface for adding,
+    removing, and focusing tool widgets, and for serialising the layout state.
 
     Parameters
     ----------
-    main_window : QMainWindow
-        The application's main window.  Passed as the parent of the
-        underlying ``CDockManager`` so Qt ADS can detect it correctly.
+    dock_manager : CDockManager
+        The ``CDockManager`` instance created by the ``.ui`` file.
     """
 
-    def __init__(self, main_window: QMainWindow) -> None:
-        CDockManager.setConfigFlag(CDockManager.eConfigFlag.DockAreaHasUndockButton, False)
-        CDockManager.setConfigFlag(CDockManager.eConfigFlag.DockAreaHasTabsMenuButton, False)
-        CDockManager.setConfigFlag(CDockManager.eConfigFlag.FocusHighlighting, True)
-        self._dock_manager = CDockManager(main_window)
+    def __init__(self, dock_manager: CDockManager) -> None:
+        self._dock_manager = dock_manager
         self._dock_widgets: dict[str, CDockWidget] = {}
-
-    def get_widget(self) -> CDockManager:
-        """Return the underlying ``CDockManager`` widget.
-
-        Used by :class:`~app.shell.main_window.MainWindow` to embed the
-        dock area as the central widget.
-
-        Returns
-        -------
-        CDockManager
-            The Qt ADS dock manager widget.
-        """
-        return self._dock_manager
 
     def add_tool_widget(self, name: str, widget: QWidget, closable: bool = True) -> CDockWidget:
         """Add a tool widget to the central dock area.

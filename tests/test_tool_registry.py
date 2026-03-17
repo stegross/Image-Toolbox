@@ -107,7 +107,7 @@ class TestToolRegistryQuery:
         """Returns sorted unique category names."""
         categories = self.registry.get_all_categories()
         assert categories == sorted(categories)
-        assert "Base" in categories
+        assert "Application" in categories
         assert "Inspection" in categories
 
     def test_get_base_tools(self) -> None:

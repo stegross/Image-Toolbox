@@ -104,10 +104,10 @@ class IBaseToolPlugin(IToolPlugin, ABC):
         If ``False``, the user cannot close this tool's dock widget.
         Default: ``False``.
     category : str
-        Navigation category. Default: ``"Base"``.
+        Navigation category. Default: ``"Application"``.
     """
 
     auto_open_on_startup: ClassVar[bool] = True
     allow_multiple_instances: ClassVar[bool] = True
     closable: ClassVar[bool] = False
-    category: ClassVar[str] = "Base"
+    category: ClassVar[str] = "Application"
