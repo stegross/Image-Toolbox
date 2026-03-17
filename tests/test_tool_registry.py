@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from app.plugin.base import IBaseToolPlugin, IToolPlugin
+from app.plugin.categories import ToolCategory
 from app.plugin.registry import ToolRegistry
 
 # ---------------------------------------------------------------------------
@@ -17,7 +18,7 @@ class _FakeWidget:
 
 class _ToolA(IToolPlugin):
     name = "Tool A"
-    category = "Inspection"
+    category = ToolCategory.IDENTIFICATION
     description = "Fake tool A"
     icon_path = ""
     version = "1.0.0"
@@ -29,7 +30,7 @@ class _ToolA(IToolPlugin):
 
 class _ToolB(IToolPlugin):
     name = "Tool B"
-    category = "Inspection"
+    category = ToolCategory.IDENTIFICATION
     description = "Fake tool B"
     icon_path = ""
     version = "1.0.0"
@@ -96,19 +97,21 @@ class TestToolRegistryQuery:
 
     def test_get_tools_by_category(self) -> None:
         """Returns only tools in the given category."""
-        inspection = self.registry.get_tools_by_category("Inspection")
-        assert set(inspection) == {_ToolA, _ToolB}
+        identification = self.registry.get_tools_by_category(ToolCategory.IDENTIFICATION)
+        assert set(identification) == {_ToolA, _ToolB}
 
-    def test_get_tools_by_category_empty(self) -> None:
-        """Returns empty list for an unknown category."""
-        assert self.registry.get_tools_by_category("DoesNotExist") == []
+    def test_get_tools_by_category_returns_only_matching(self) -> None:
+        """Does not return tools from other categories."""
+        application = self.registry.get_tools_by_category(ToolCategory.APPLICATION)
+        assert _ToolA not in application
+        assert _ToolB not in application
 
     def test_get_all_categories_sorted(self) -> None:
-        """Returns sorted unique category names."""
+        """Returns categories sorted by display value."""
         categories = self.registry.get_all_categories()
-        assert categories == sorted(categories)
-        assert "Application" in categories
-        assert "Inspection" in categories
+        assert categories == sorted(categories, key=lambda c: c.value)
+        assert ToolCategory.APPLICATION in categories
+        assert ToolCategory.IDENTIFICATION in categories
 
     def test_get_base_tools(self) -> None:
         """Returns only IBaseToolPlugin subclasses."""
@@ -143,6 +146,16 @@ class TestToolRegistryInstances:
     def test_remove_instance_noop_when_not_tracked(self) -> None:
         """remove_instance does not raise when tool is not tracked."""
         self.registry.remove_instance("Tool A")  # should not raise
+
+
+class TestToolRegistryQueryEmpty:
+    """Tests for get_tools_by_category when the category has no tools."""
+
+    def test_get_tools_by_category_empty(self) -> None:
+        """Returns empty list when no tools are registered in a category."""
+        ToolRegistry.register(_BaseTool)  # APPLICATION only
+        registry = ToolRegistry()
+        assert registry.get_tools_by_category(ToolCategory.IDENTIFICATION) == []
 
 
 class TestToolRegistryClear:

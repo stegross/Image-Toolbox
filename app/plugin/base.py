@@ -8,6 +8,8 @@ from typing import ClassVar
 
 from PySide6.QtWidgets import QWidget
 
+from app.plugin.categories import ToolCategory
+
 
 class IToolPlugin(ABC):
     """Abstract interface that every tool plugin must implement.
@@ -20,8 +22,8 @@ class IToolPlugin(ABC):
     ----------
     name : str
         Unique tool name used as the registry key and dock widget title.
-    category : str
-        Navigation bar category this tool belongs to (e.g. ``"Base"``).
+    category : ToolCategory
+        Navigation menu category this tool belongs to.
     description : str
         Short human-readable description shown in the UI.
     icon_path : str
@@ -32,7 +34,7 @@ class IToolPlugin(ABC):
     """
 
     name: ClassVar[str]
-    category: ClassVar[str]
+    category: ClassVar[ToolCategory]
     description: ClassVar[str]
     icon_path: ClassVar[str]
     version: ClassVar[str]
@@ -79,7 +81,7 @@ class IToolPlugin(ABC):
         """
         return {
             "name": self.name,
-            "category": self.category,
+            "category": self.category.value,
             "description": self.description,
             "version": self.version,
         }
@@ -103,11 +105,11 @@ class IBaseToolPlugin(IToolPlugin, ABC):
     closable : bool
         If ``False``, the user cannot close this tool's dock widget.
         Default: ``False``.
-    category : str
-        Navigation category. Default: ``"Application"``.
+    category : ToolCategory
+        Navigation menu category. Default: :attr:`~ToolCategory.APPLICATION`.
     """
 
     auto_open_on_startup: ClassVar[bool] = True
     allow_multiple_instances: ClassVar[bool] = True
     closable: ClassVar[bool] = False
-    category: ClassVar[str] = "Application"
+    category: ClassVar[ToolCategory] = ToolCategory.APPLICATION

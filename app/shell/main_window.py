@@ -6,16 +6,16 @@ import logging
 import os
 from pathlib import Path
 
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QAction, QCloseEvent
 from PySide6.QtWidgets import QMainWindow, QWidget
 from PySide6QtAds import CDockManager
 
 from app.core.config import ConfigManager
 from app.core.roles import RoleManager
+from app.plugin.categories import ToolCategory
 from app.plugin.registry import ToolRegistry
 from app.shell.docking_manager import DockingManager
 from app.shell.layout import LayoutPersistence
-from app.shell.navigation import NavigationBar
 from app.shell.ui.ui_main_window import Ui_MainWindow
 
 _logger = logging.getLogger("vi_toolbox.shell.main_window")
@@ -26,8 +26,8 @@ _LOG_DIR = Path.home() / ".vi_toolbox" / "logs"
 class MainWindow(QMainWindow):
     """Top-level application window for VI-Toolbox.
 
-    Owns the docking area, navigation bar, and all currently open tool
-    widgets.  Delegates layout persistence to
+    Owns the docking area, menu bar, and all currently open tool widgets.
+    Delegates layout persistence to
     :class:`~app.shell.layout.LayoutPersistence` and tool lifecycle to
     :class:`~app.plugin.registry.ToolRegistry`.
 
@@ -68,30 +68,30 @@ class MainWindow(QMainWindow):
 
         1. Set Qt ADS config flags (must happen before ``CDockManager`` is
            created inside ``setupUi``).
-        2. Load the ``.ui`` file — creates the ``CDockManager`` and toolbar.
-        3. Wrap the dock manager and build the navigation bar.
-        4. Restore previously saved layout (REQ-HS-007).
-        5. Open all base tools automatically.
+        2. Load the ``.ui`` file — creates the ``CDockManager`` and menu bar.
+        3. Wrap the dock manager.
+        4. Connect static menu actions and build dynamic category menus.
+        5. Restore previously saved layout (REQ-HS-007).
+        6. Open all base tools automatically.
         """
         # Config flags must be set before CDockManager is instantiated
         CDockManager.setConfigFlag(CDockManager.eConfigFlag.DockAreaHasUndockButton, False)
         CDockManager.setConfigFlag(CDockManager.eConfigFlag.DockAreaHasTabsMenuButton, False)
         CDockManager.setConfigFlag(CDockManager.eConfigFlag.FocusHighlighting, True)
 
-        # Load the .ui file (creates dockManager and navigationToolBar)
+        # Load the .ui file (creates dockManager and the Application menu bar)
         self._ui = Ui_MainWindow()
         self._ui.setupUi(self)
 
         # Wrap the CDockManager created by setupUi
         self._docking_manager = DockingManager(self._ui.dockManager)
 
-        # Build NavigationBar and embed it in the toolbar from the .ui
-        self._nav_bar = NavigationBar(self._tool_registry, self)
-        self._ui.navigationToolBar.addWidget(self._nav_bar)
+        # Connect static Application-menu actions
+        self._ui.actionOpenLogFolder.triggered.connect(lambda: self._open_log_folder())
+        self._ui.actionAbout.triggered.connect(lambda: _logger.info("About: VI-Toolbox v0.1.0"))
 
-        # Wire signals
-        self._nav_bar.tool_selected.connect(self.open_tool)
-        self._nav_bar.action_triggered.connect(self._handle_action)
+        # Insert tool-button actions and build dynamic category menus
+        self._build_category_menus()
 
         # Restore layout from previous session (REQ-HS-007)
         self.restore_layout()
@@ -188,24 +188,51 @@ class MainWindow(QMainWindow):
     # Private helpers
     # ------------------------------------------------------------------
 
+    def _build_category_menus(self) -> None:
+        """Populate the menu bar with tool actions for each category.
+
+        The *Application* menu is already defined in the ``.ui`` file with
+        its static actions (Open Log Folder, About).  This method prepends
+        tool actions for :attr:`~ToolCategory.APPLICATION` tools before
+        those static entries and appends a new :class:`QMenu` for every
+        other registered category.
+        """
+        for category in self._tool_registry.get_all_categories():
+            tools = self._tool_registry.get_tools_by_category(category)
+            if not tools:
+                continue
+
+            if category == ToolCategory.APPLICATION:
+                # Prepend tool actions before the static Open Log Folder entry
+                separator = self._ui.menuApplication.insertSeparator(self._ui.actionOpenLogFolder)
+                for tool_cls in tools:
+                    action = QAction(tool_cls.name, self)
+                    action.setToolTip(tool_cls.description)
+                    action.triggered.connect(
+                        lambda _checked=False, n=tool_cls.name: self.open_tool(n)
+                    )
+                    self._ui.menuApplication.insertAction(separator, action)
+            else:
+                menu = self.menuBar().addMenu(category.value)
+                for tool_cls in tools:
+                    action = menu.addAction(tool_cls.name)
+                    action.setToolTip(tool_cls.description)
+                    action.triggered.connect(
+                        lambda _checked=False, n=tool_cls.name: self.open_tool(n)
+                    )
+
+        _logger.debug(
+            "Category menus built: %d categories registered.",
+            len(self._tool_registry.get_all_categories()),
+        )
+
     def _open_base_tools(self) -> None:
         """Open all base tools that have ``auto_open_on_startup = True``."""
         for tool_cls in self._tool_registry.get_base_tools():
             if getattr(tool_cls, "auto_open_on_startup", False):
                 self.open_tool(tool_cls.name)
 
-    def _handle_action(self, action: str) -> None:
-        """Dispatch static navigation bar actions.
-
-        Parameters
-        ----------
-        action : str
-            Action key emitted by :class:`~app.shell.navigation.NavigationBar`.
-        """
-        if action == "open_log_folder":
-            _LOG_DIR.mkdir(parents=True, exist_ok=True)
-            os.startfile(str(_LOG_DIR))  # Windows only (REQ-EC-004)
-        elif action == "about":
-            _logger.info("About: VI-Toolbox v0.1.0")
-        else:
-            _logger.warning("Unknown action: %s", action)
+    def _open_log_folder(self) -> None:
+        """Open the application log folder in Windows Explorer."""
+        _LOG_DIR.mkdir(parents=True, exist_ok=True)
+        os.startfile(str(_LOG_DIR))  # Windows only (REQ-EC-004)

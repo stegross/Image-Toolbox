@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from app.plugin.categories import ToolCategory
+
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
 
@@ -82,13 +84,13 @@ class ToolRegistry:
             raise KeyError(f"Tool '{name}' is not registered.")
         return self._registered_tools[name]
 
-    def get_tools_by_category(self, category: str) -> list[type[IToolPlugin]]:
+    def get_tools_by_category(self, category: ToolCategory) -> list[type[IToolPlugin]]:
         """Return all registered tools in *category*.
 
         Parameters
         ----------
-        category : str
-            Category name to filter by.
+        category : ToolCategory
+            Category to filter by.
 
         Returns
         -------
@@ -97,15 +99,15 @@ class ToolRegistry:
         """
         return [t for t in self._registered_tools.values() if t.category == category]
 
-    def get_all_categories(self) -> list[str]:
-        """Return a sorted list of all unique category names.
+    def get_all_categories(self) -> list[ToolCategory]:
+        """Return a sorted list of all unique categories.
 
         Returns
         -------
-        list[str]
-            Sorted unique category names across all registered tools.
+        list[ToolCategory]
+            Unique categories across all registered tools, sorted by value.
         """
-        return sorted({t.category for t in self._registered_tools.values()})
+        return sorted({t.category for t in self._registered_tools.values()}, key=lambda c: c.value)
 
     def get_base_tools(self) -> list[type[IBaseToolPlugin]]:
         """Return all tools that subclass :class:`~app.plugin.base.IBaseToolPlugin`.
