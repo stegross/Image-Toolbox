@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from app.plugin.categories import ToolCategory
+from app.tools.base.file_explorer.explorer import FileExplorer
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
@@ -172,6 +173,5 @@ class ToolRegistry:
 # ---------------------------------------------------------------------------
 # Static tool registrations (REQ-HS-015)
 # ---------------------------------------------------------------------------
-# Base tools and extension tools will be imported and registered here
-# once their modules are implemented.
-# ---------------------------------------------------------------------------
+
+ToolRegistry.register(FileExplorer)

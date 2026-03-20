@@ -6,13 +6,13 @@ import logging
 import os
 from pathlib import Path
 
-from PySide6.QtGui import QAction, QCloseEvent
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QMainWindow, QWidget
 from PySide6QtAds import CDockManager
 
 from app.core.config import ConfigManager
 from app.core.roles import RoleManager
-from app.plugin.categories import ToolCategory
+from app.plugin.base import IBaseToolPlugin
 from app.plugin.registry import ToolRegistry
 from app.shell.docking_manager import DockingManager
 from app.shell.layout import LayoutPersistence
@@ -131,7 +131,10 @@ class MainWindow(QMainWindow):
             _logger.warning("Access denied: user has no permission for '%s'.", name)
             return
 
-        tool_instance = tool_cls()
+        if issubclass(tool_cls, IBaseToolPlugin):
+            tool_instance = tool_cls(self._config_manager)
+        else:
+            tool_instance = tool_cls()
         widget = tool_instance.create_widget(self)
         closable = getattr(tool_cls, "closable", True)
 
@@ -189,37 +192,23 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _build_category_menus(self) -> None:
-        """Populate the menu bar with tool actions for each category.
+        """Populate the menu bar with a top-level menu for each tool category.
 
-        The *Application* menu is already defined in the ``.ui`` file with
-        its static actions (Open Log Folder, About).  This method prepends
-        tool actions for :attr:`~ToolCategory.APPLICATION` tools before
-        those static entries and appends a new :class:`QMenu` for every
-        other registered category.
+        Each registered category gets its own :class:`QMenu` appended to the
+        menu bar after the static *Application* menu defined in the ``.ui``
+        file.  The *Application* menu itself is left unchanged (it contains
+        only Open Log Folder and About).
         """
         for category in self._tool_registry.get_all_categories():
             tools = self._tool_registry.get_tools_by_category(category)
             if not tools:
                 continue
 
-            if category == ToolCategory.APPLICATION:
-                # Prepend tool actions before the static Open Log Folder entry
-                separator = self._ui.menuApplication.insertSeparator(self._ui.actionOpenLogFolder)
-                for tool_cls in tools:
-                    action = QAction(tool_cls.name, self)
-                    action.setToolTip(tool_cls.description)
-                    action.triggered.connect(
-                        lambda _checked=False, n=tool_cls.name: self.open_tool(n)
-                    )
-                    self._ui.menuApplication.insertAction(separator, action)
-            else:
-                menu = self.menuBar().addMenu(category.value)
-                for tool_cls in tools:
-                    action = menu.addAction(tool_cls.name)
-                    action.setToolTip(tool_cls.description)
-                    action.triggered.connect(
-                        lambda _checked=False, n=tool_cls.name: self.open_tool(n)
-                    )
+            menu = self.menuBar().addMenu(category.value)
+            for tool_cls in tools:
+                action = menu.addAction(tool_cls.name)
+                action.setToolTip(tool_cls.description)
+                action.triggered.connect(lambda _checked=False, n=tool_cls.name: self.open_tool(n))
 
         _logger.debug(
             "Category menus built: %d categories registered.",

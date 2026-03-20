@@ -24,5 +24,5 @@ class ToolCategory(Enum):
         menu = self.menuBar().addMenu(category.value)
     """
 
-    APPLICATION = "Application"
+    BASE = "Base"
     IDENTIFICATION = "Identification"

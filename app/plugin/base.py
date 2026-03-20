@@ -106,10 +106,10 @@ class IBaseToolPlugin(IToolPlugin, ABC):
         If ``False``, the user cannot close this tool's dock widget.
         Default: ``False``.
     category : ToolCategory
-        Navigation menu category. Default: :attr:`~ToolCategory.APPLICATION`.
+        Navigation menu category. Default: :attr:`~ToolCategory.BASE`.
     """
 
     auto_open_on_startup: ClassVar[bool] = True
     allow_multiple_instances: ClassVar[bool] = True
     closable: ClassVar[bool] = False
-    category: ClassVar[ToolCategory] = ToolCategory.APPLICATION
+    category: ClassVar[ToolCategory] = ToolCategory.BASE

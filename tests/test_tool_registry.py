@@ -102,7 +102,7 @@ class TestToolRegistryQuery:
 
     def test_get_tools_by_category_returns_only_matching(self) -> None:
         """Does not return tools from other categories."""
-        application = self.registry.get_tools_by_category(ToolCategory.APPLICATION)
+        application = self.registry.get_tools_by_category(ToolCategory.BASE)
         assert _ToolA not in application
         assert _ToolB not in application
 
@@ -110,7 +110,7 @@ class TestToolRegistryQuery:
         """Returns categories sorted by display value."""
         categories = self.registry.get_all_categories()
         assert categories == sorted(categories, key=lambda c: c.value)
-        assert ToolCategory.APPLICATION in categories
+        assert ToolCategory.BASE in categories
         assert ToolCategory.IDENTIFICATION in categories
 
     def test_get_base_tools(self) -> None:
@@ -153,7 +153,7 @@ class TestToolRegistryQueryEmpty:
 
     def test_get_tools_by_category_empty(self) -> None:
         """Returns empty list when no tools are registered in a category."""
-        ToolRegistry.register(_BaseTool)  # APPLICATION only
+        ToolRegistry.register(_BaseTool)  # BASE category only
         registry = ToolRegistry()
         assert registry.get_tools_by_category(ToolCategory.IDENTIFICATION) == []
 
