@@ -56,6 +56,7 @@ class FileExplorer(QWidget, IBaseToolPlugin, metaclass=_FileExplorerMeta):
     description: ClassVar[str] = "Browse and manage the working directory for VI postprocessing."
     icon_path: ClassVar[str] = ""
     version: ClassVar[str] = "1.0.0"
+    logger_name: ClassVar[str] = "vi_toolbox.tools.file_explorer"
     # category inherits BASE default from IBaseToolPlugin
     allow_multiple_instances: ClassVar[bool] = False
     closable: ClassVar[bool] = True
