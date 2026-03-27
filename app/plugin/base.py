@@ -38,6 +38,7 @@ class IToolPlugin(ABC):
     description: ClassVar[str]
     icon_path: ClassVar[str]
     version: ClassVar[str]
+    logger_name: ClassVar[str] = ""  # dotted logger name, e.g. "vi_toolbox.tools.file_explorer"
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Validate that concrete subclasses define all required class attributes."""

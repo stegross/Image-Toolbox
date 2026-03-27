@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from app.plugin.categories import ToolCategory
 from app.tools.base.file_explorer.explorer import FileExplorer
+from app.tools.base.log_viewer.viewer import LogViewer
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
@@ -175,3 +176,4 @@ class ToolRegistry:
 # ---------------------------------------------------------------------------
 
 ToolRegistry.register(FileExplorer)
+ToolRegistry.register(LogViewer)

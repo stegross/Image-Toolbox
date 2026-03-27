@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 from PySide6.QtCore import QByteArray
 from PySide6.QtWidgets import QWidget
@@ -28,7 +29,13 @@ class DockingManager:
         self._dock_manager = dock_manager
         self._dock_widgets: dict[str, CDockWidget] = {}
 
-    def add_tool_widget(self, name: str, widget: QWidget, closable: bool = True) -> CDockWidget:
+    def add_tool_widget(
+        self,
+        name: str,
+        widget: QWidget,
+        closable: bool = True,
+        on_close: Callable[[], None] | None = None,
+    ) -> CDockWidget:
         """Add a tool widget to the central dock area.
 
         Parameters
@@ -39,6 +46,10 @@ class DockingManager:
             The tool's content widget.
         closable : bool
             Whether the user can close this dock widget.
+        on_close : Callable[[], None] | None
+            Optional callback invoked when the dock widget is closed via the
+            Qt ADS UI.  Use this to clean up registry state and call the
+            tool's :meth:`~app.plugin.base.IToolPlugin.on_close` hook.
 
         Returns
         -------
@@ -50,6 +61,13 @@ class DockingManager:
 
         if not closable:
             dock.setFeature(CDockWidget.DockWidgetFeature.DockWidgetClosable, False)
+
+        def _on_dock_closed() -> None:
+            self._dock_widgets.pop(name, None)
+            if on_close is not None:
+                on_close()
+
+        dock.closed.connect(_on_dock_closed)
 
         self._dock_manager.addDockWidget(DockWidgetArea.CenterDockWidgetArea, dock)
         self._dock_widgets[name] = dock

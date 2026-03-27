@@ -138,7 +138,12 @@ class MainWindow(QMainWindow):
         widget = tool_instance.create_widget(self)
         closable = getattr(tool_cls, "closable", True)
 
-        self._docking_manager.add_tool_widget(name, widget, closable=closable)
+        def _on_tool_closed() -> None:
+            tool_instance.on_close()
+            self._tool_registry.remove_instance(name)
+            _logger.info("Tool closed: %s", name)
+
+        self._docking_manager.add_tool_widget(name, widget, closable=closable, on_close=_on_tool_closed)
         self._tool_registry.set_instance(name, widget)
         tool_instance.on_activate()
 

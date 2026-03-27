@@ -6,7 +6,8 @@ import logging
 import logging.handlers
 from pathlib import Path
 
-_APP_LOGGER = "vi_toolbox"
+APP_LOGGER_NAME = "vi_toolbox"
+_APP_LOGGER = APP_LOGGER_NAME  # internal alias kept for backward compatibility
 
 
 def initialize_logging(log_dir: Path | None = None, level: int = logging.DEBUG) -> None:
