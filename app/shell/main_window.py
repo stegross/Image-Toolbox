@@ -93,31 +93,48 @@ class MainWindow(QMainWindow):
         # Insert tool-button actions and build dynamic category menus
         self._build_category_menus()
 
-        # Restore layout from previous session (REQ-HS-007)
-        self.restore_layout()
+        # Ordered map of instance_key → tool_name for every currently open tool.
+        # Maintained by open_tool / _on_tool_closed to build the session snapshot.
+        self._open_instance_names: dict[str, str] = {}
 
-        # Open base tools automatically
-        self._open_base_tools()
+        # If a session was previously saved, restore those exact tool instances (in
+        # order) so instance keys match what Qt ADS persisted.  Otherwise fall back
+        # to the hardcoded default layout (auto_open_on_startup tools + default size).
+        saved_tools = self._layout_persistence.load_open_tools()
+        if saved_tools is not None:
+            for tool_name in saved_tools:
+                self.open_tool(tool_name)
+            self.restore_layout()
+        else:
+            self._open_default_layout()
 
         _logger.info("MainWindow initialised.")
 
-    def open_tool(self, name: str) -> None:
+    def open_tool(self, name: str) -> QWidget | None:
         """Open a tool by name, respecting instance and permission rules.
 
         If *name* is already instantiated and ``allow_multiple_instances``
-        is ``False``, the existing dock widget is focused instead.
+        is ``False``, the existing dock widget is focused instead and ``None``
+        is returned.  Otherwise the new widget is returned so callers can
+        perform post-open operations (e.g. call ``open_from_path``).
 
         Parameters
         ----------
         name : str
             Tool name as registered in
             :class:`~app.plugin.registry.ToolRegistry`.
+
+        Returns
+        -------
+        QWidget | None
+            The newly created widget, or ``None`` when an existing instance
+            was focused.
         """
         try:
             tool_cls = self._tool_registry.get_tool(name)
         except KeyError:
             _logger.error("open_tool: unknown tool '%s'", name)
-            return
+            return None
 
         already_open = self._tool_registry.is_instantiated(name)
         allow_multiple = getattr(tool_cls, "allow_multiple_instances", False)
@@ -125,29 +142,40 @@ class MainWindow(QMainWindow):
         if already_open and not allow_multiple:
             _logger.debug("Tool '%s' already open — focusing existing widget.", name)
             self._docking_manager.focus_widget(name)
-            return
+            return None
 
         if not self._role_manager.has_permission(name):
             _logger.warning("Access denied: user has no permission for '%s'.", name)
-            return
+            return None
+
+        instance_key, instance_id = self._tool_registry.allocate_instance_key(name, allow_multiple)
 
         if issubclass(tool_cls, IBaseToolPlugin):
             tool_instance = tool_cls(self._config_manager)
         else:
             tool_instance = tool_cls()
+        tool_instance._assign_instance_id(instance_id)
         widget = tool_instance.create_widget(self)
         closable = getattr(tool_cls, "closable", True)
 
+        self._open_instance_names[instance_key] = name
+
         def _on_tool_closed() -> None:
             tool_instance.on_close()
-            self._tool_registry.remove_instance(name)
-            _logger.info("Tool closed: %s", name)
+            self._tool_registry.remove_instance(instance_key)
+            self._open_instance_names.pop(instance_key, None)
+            _logger.info("Tool closed: %s", instance_key)
 
-        self._docking_manager.add_tool_widget(name, widget, closable=closable, on_close=_on_tool_closed)
-        self._tool_registry.set_instance(name, widget)
+        self._docking_manager.add_tool_widget(
+            instance_key, widget, closable=closable, on_close=_on_tool_closed
+        )
+        self._tool_registry.set_instance(instance_key, widget)
+        if hasattr(widget, "open_tool_with_path_requested"):
+            widget.open_tool_with_path_requested.connect(self._on_open_tool_with_path)
         tool_instance.on_activate()
 
-        _logger.info("Tool opened: %s", name)
+        _logger.info("Tool opened: %s", instance_key)
+        return widget
 
     def close_tool(self, name: str) -> None:
         """Close and remove a tool widget from the dock area.
@@ -167,7 +195,12 @@ class MainWindow(QMainWindow):
         self._layout_persistence.save(state)
 
     def restore_layout(self) -> None:
-        """Restore the dock layout from the last saved session (REQ-HS-007)."""
+        """Restore the dock layout and window geometry from the last saved session (REQ-HS-007)."""
+        geometry = self._layout_persistence.load_geometry()
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+            _logger.info("Window geometry restored from previous session.")
+
         state = self._layout_persistence.load()
         if state is not None:
             self._docking_manager.restore_state(state)
@@ -189,6 +222,8 @@ class MainWindow(QMainWindow):
         """
         _logger.info("Shutdown initiated.")
         self._config_manager.save_all()
+        self._layout_persistence.save_open_tools(list(self._open_instance_names.values()))
+        self._layout_persistence.save_geometry(self.saveGeometry())
         self.save_layout()
         event.accept()
 
@@ -220,11 +255,31 @@ class MainWindow(QMainWindow):
             len(self._tool_registry.get_all_categories()),
         )
 
-    def _open_base_tools(self) -> None:
-        """Open all base tools that have ``auto_open_on_startup = True``."""
+    def _open_default_layout(self) -> None:
+        """Apply the hardcoded default layout for first-time startup.
+
+        Opens all tools with ``auto_open_on_startup = True`` and sets a
+        sensible default window size.  Only called when no saved session
+        exists (e.g. very first launch or after the state files are deleted).
+        """
+        self.resize(1400, 900)
         for tool_cls in self._tool_registry.get_base_tools():
             if getattr(tool_cls, "auto_open_on_startup", False):
                 self.open_tool(tool_cls.name)
+
+    def _on_open_tool_with_path(self, tool_name: str, path: object) -> None:
+        """Open a fresh instance of *tool_name* and load *path* into it.
+
+        Parameters
+        ----------
+        tool_name : str
+            Registered tool name.
+        path : object
+            A :class:`~pathlib.Path` instance forwarded from the emitting tool.
+        """
+        widget = self.open_tool(tool_name)
+        if widget is not None and hasattr(widget, "open_from_path"):
+            widget.open_from_path(path)
 
     def _open_log_folder(self) -> None:
         """Open the application log folder in Windows Explorer."""

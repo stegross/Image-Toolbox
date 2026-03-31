@@ -153,6 +153,9 @@ class LogViewer(QWidget, IBaseToolPlugin, metaclass=_LogViewerMeta):
             )
         )
 
+        # Buffer of every received record — filter is applied at display time.
+        self._record_buffer: list[tuple[str, int, str]] = []  # (message, levelno, logger_name)
+
         self._setup_ui()
         self._load_config()
 
@@ -262,17 +265,37 @@ class LogViewer(QWidget, IBaseToolPlugin, metaclass=_LogViewerMeta):
     def _on_level_changed(self, text: str) -> None:
         self._exact_level = _LEVEL_MAP.get(text)
         self._save_config()
+        self._rebuild_output()
 
     def _on_subsystem_changed(self, text: str) -> None:
         self._subsystem_prefix = self._subsystem_map.get(text)
         self._save_config()
+        self._rebuild_output()
 
     def _on_record(self, message: str, levelno: int, logger_name: str) -> None:
-        if self._exact_level is not None and levelno != self._exact_level:
-            return
-        if self._subsystem_prefix and not logger_name.startswith(self._subsystem_prefix):
+        self._record_buffer.append((message, levelno, logger_name))
+        if len(self._record_buffer) > _MAX_LINES:
+            self._record_buffer = self._record_buffer[-_MAX_LINES:]
+        if not self._matches_filter(levelno, logger_name):
             return
         self._append_colored(message, levelno)
+        if self._auto_scroll:
+            scrollbar = self._output.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
+
+    def _matches_filter(self, levelno: int, logger_name: str) -> bool:
+        if self._exact_level is not None and levelno != self._exact_level:
+            return False
+        if self._subsystem_prefix and not logger_name.startswith(self._subsystem_prefix):
+            return False
+        return True
+
+    def _rebuild_output(self) -> None:
+        """Clear the display and re-render all buffered records through the current filter."""
+        self._output.clear()
+        for message, levelno, logger_name in self._record_buffer:
+            if self._matches_filter(levelno, logger_name):
+                self._append_colored(message, levelno)
         if self._auto_scroll:
             scrollbar = self._output.verticalScrollBar()
             scrollbar.setValue(scrollbar.maximum())

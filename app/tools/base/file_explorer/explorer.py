@@ -8,7 +8,7 @@ from abc import ABCMeta
 from pathlib import Path
 from typing import ClassVar
 
-from PySide6.QtCore import QModelIndex, QPoint, Qt
+from PySide6.QtCore import QModelIndex, QPoint, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QFileDialog,
     QFileSystemModel,
@@ -63,6 +63,10 @@ class FileExplorer(QWidget, IBaseToolPlugin, metaclass=_FileExplorerMeta):
 
     current_root_dir: ClassVar[Path | None] = None
 
+    # Emitted when the user picks "Open in <tool>" from the context menu.
+    # MainWindow listens and opens a fresh tool instance, then calls open_from_path.
+    open_tool_with_path_requested = Signal(str, object)  # (tool_name, path)
+
     def __init__(
         self,
         config_manager: ConfigManager,
@@ -71,7 +75,7 @@ class FileExplorer(QWidget, IBaseToolPlugin, metaclass=_FileExplorerMeta):
         QWidget.__init__(self, parent)
         self._config_manager = config_manager
         self._setup_ui()
-        self._load_root_from_config()
+        QTimer.singleShot(0, self._load_root_from_config)
 
     # ------------------------------------------------------------------
     # IBaseToolPlugin interface
@@ -131,6 +135,8 @@ class FileExplorer(QWidget, IBaseToolPlugin, metaclass=_FileExplorerMeta):
             path = Path(raw)
             if path.exists():
                 self._set_root_dir(path)
+            else:
+                _logger.error("Saved root directory no longer exists: %s", path)
 
     def _set_root_dir(self, path: Path) -> None:
         FileExplorer.current_root_dir = path
@@ -172,6 +178,30 @@ class FileExplorer(QWidget, IBaseToolPlugin, metaclass=_FileExplorerMeta):
             act_new_file = menu.addAction("New File")
             act_new_folder = menu.addAction("New Folder")
 
+        # Group 4 — "Open in…" submenu built from registered tool classes
+        # (no active instance required — each click opens a fresh instance).
+        open_in_actions: dict[object, str] = {}
+        if path is not None:
+            from app.plugin.registry import ToolRegistry  # noqa: PLC0415 (lazy — avoids circular dep)
+
+            ext = path.suffix.lower()
+            handlers = [
+                name
+                for name, tool_cls in ToolRegistry._registered_tools.items()
+                if tool_cls is not type(self)
+                and (
+                    (path.is_dir() and getattr(tool_cls, "handles_folders", False))
+                    or (path.is_file() and ext in getattr(tool_cls, "handled_path_extensions", frozenset()))
+                )
+            ]
+            if handlers:
+                menu.addSeparator()
+                open_in_menu = QMenu("Open in…", menu)
+                for name in handlers:
+                    act = open_in_menu.addAction(name)
+                    open_in_actions[act] = name
+                menu.addMenu(open_in_menu)
+
         action = menu.exec(self._tree.viewport().mapToGlobal(pos))
         if action is None:
             return
@@ -188,6 +218,8 @@ class FileExplorer(QWidget, IBaseToolPlugin, metaclass=_FileExplorerMeta):
             self._action_new_file(path)
         elif action is act_new_folder and path is not None:
             self._action_new_folder(path)
+        elif action in open_in_actions and path is not None:
+            self.open_tool_with_path_requested.emit(open_in_actions[action], path)
 
     # ------------------------------------------------------------------
     # Actions
