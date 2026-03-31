@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from app.plugin.categories import ToolCategory
 from app.tools.base.file_explorer.explorer import FileExplorer
+from app.tools.base.image_viewer.viewer import ImageViewer
 from app.tools.base.log_viewer.viewer import LogViewer
 
 if TYPE_CHECKING:
@@ -43,6 +44,35 @@ class ToolRegistry:
 
     _registered_tools: dict[str, type[IToolPlugin]] = {}
     _instances: dict[str, QWidget] = {}
+    # Monotonically increasing per-tool-name counter.  Never reset on close so
+    # IDs remain unique for the lifetime of the process.
+    _instance_counters: dict[str, int] = {}
+
+    @classmethod
+    def allocate_instance_key(cls, name: str, allow_multiple: bool) -> tuple[str, int]:
+        """Return ``(instance_key, instance_id)`` for a new tool instance.
+
+        For single-instance tools the key equals *name* and the id is ``0``.
+        For multi-instance tools the counter for *name* is incremented and the
+        key becomes ``"<name> (<id>)"``.
+
+        Parameters
+        ----------
+        name : str
+            Registered tool name.
+        allow_multiple : bool
+            Whether this tool allows more than one open instance.
+
+        Returns
+        -------
+        tuple[str, int]
+            ``(instance_key, instance_id)``
+        """
+        if not allow_multiple:
+            return name, 0
+        new_id = cls._instance_counters.get(name, 0) + 1
+        cls._instance_counters[name] = new_id
+        return f"{name} ({new_id})", new_id
 
     @classmethod
     def register(cls, plugin_cls: type[IToolPlugin]) -> None:
@@ -169,6 +199,7 @@ class ToolRegistry:
         """
         cls._registered_tools.clear()
         cls._instances.clear()
+        cls._instance_counters.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -176,4 +207,5 @@ class ToolRegistry:
 # ---------------------------------------------------------------------------
 
 ToolRegistry.register(FileExplorer)
+ToolRegistry.register(ImageViewer)
 ToolRegistry.register(LogViewer)
