@@ -20,10 +20,7 @@ class PaddleOcrEngine(AbstractOcrEngine):
     """OCR engine backed by `PaddleOCR <https://github.com/PaddlePaddle/PaddleOCR>`_.
 
     Requires:
-    - ``pip install paddleocr``
-
-    The engine is initialised in English-only mode with angle classification
-    enabled (handles ±90° rotations) and logging suppressed.
+    - ``pip install paddleocr paddlepaddle``
 
     Raises
     ------
@@ -32,18 +29,21 @@ class PaddleOcrEngine(AbstractOcrEngine):
     """
 
     def __init__(self) -> None:
+        import os
+        # Must be set before importing paddleocr — the connectivity check runs at import time
+        os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
         try:
             from paddleocr import PaddleOCR  # type: ignore[import]
         except ImportError as exc:
             raise ImportError(
-                "paddleocr is not installed. Run: pip install paddleocr"
+                "paddleocr is not installed. Run: pip install paddleocr paddlepaddle"
             ) from exc
-        self._ocr = PaddleOCR(use_angle_cls=True, lang="en", show_log=False)
+        self._ocr = PaddleOCR(use_angle_cls=True, lang="en")
         _logger.info("PaddleOcrEngine initialised.")
 
     def detect_text_regions(self, image: QImage) -> list[DetectedRegion]:
         arr = qimage_to_numpy_gray(image)
-        result = self._ocr.ocr(arr, cls=True)
+        result = self._ocr.ocr(arr)
         if not result or not result[0]:
             return []
         regions: list[DetectedRegion] = []
@@ -65,7 +65,7 @@ class PaddleOcrEngine(AbstractOcrEngine):
 
     def recognize_text(self, image: QImage) -> OcrResult:
         arr = qimage_to_numpy_gray(image)
-        result = self._ocr.ocr(arr, cls=True)
+        result = self._ocr.ocr(arr)
         if not result or not result[0]:
             return OcrResult(text="", confidence=0.0)
         texts: list[str] = []

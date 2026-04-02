@@ -289,7 +289,8 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
         ocr_name = self._ocr_framework_combo.currentText() if self._ocr_framework_combo else "Tesseract"
         try:
             detection_engine = create_engine(detection_name)
-            recognition_engine = create_engine(ocr_name)
+            # Reuse the same instance if both combos select the same framework
+            recognition_engine = detection_engine if ocr_name == detection_name else create_engine(ocr_name)
         except (ImportError, RuntimeError, ValueError) as exc:
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "OCR Engine Error", str(exc))
