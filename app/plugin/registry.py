@@ -17,6 +17,7 @@ from app.plugin.categories import ToolCategory
 from app.tools.base.file_explorer.explorer import FileExplorer
 from app.tools.base.image_viewer.viewer import ImageViewer
 from app.tools.base.log_viewer.viewer import LogViewer
+from app.tools.extensions.identification_tool.tool import SciBitTool
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
@@ -209,3 +210,4 @@ class ToolRegistry:
 ToolRegistry.register(FileExplorer)
 ToolRegistry.register(ImageViewer)
 ToolRegistry.register(LogViewer)
+ToolRegistry.register(SciBitTool)
