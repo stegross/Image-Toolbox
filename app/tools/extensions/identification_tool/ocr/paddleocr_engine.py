@@ -6,7 +6,7 @@ import logging
 
 from PySide6.QtGui import QImage
 
-from app.tools.extensions.identification_tool.ocr._convert import qimage_to_numpy_gray
+from app.tools.extensions.identification_tool.ocr._convert import qimage_to_numpy_rgb
 from app.tools.extensions.identification_tool.ocr.base import (
     AbstractOcrEngine,
     DetectedRegion,
@@ -42,7 +42,7 @@ class PaddleOcrEngine(AbstractOcrEngine):
         _logger.info("PaddleOcrEngine initialised.")
 
     def detect_text_regions(self, image: QImage) -> list[DetectedRegion]:
-        arr = qimage_to_numpy_gray(image)
+        arr = qimage_to_numpy_rgb(image)
         result = self._ocr.ocr(arr)
         if not result or not result[0]:
             return []
@@ -64,7 +64,7 @@ class PaddleOcrEngine(AbstractOcrEngine):
         return regions
 
     def recognize_text(self, image: QImage) -> OcrResult:
-        arr = qimage_to_numpy_gray(image)
+        arr = qimage_to_numpy_rgb(image)
         result = self._ocr.ocr(arr)
         if not result or not result[0]:
             return OcrResult(text="", confidence=0.0)
