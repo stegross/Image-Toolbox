@@ -31,7 +31,7 @@ from app.tools.extensions.identification_tool.config import (
     OCR_FRAMEWORKS,
     load_identifier_configs,
 )
-from app.tools.extensions.identification_tool.ocr.stub import StubOcrEngine
+from app.tools.extensions.identification_tool.ocr.factory import create_engine
 from app.tools.extensions.identification_tool.pipeline.base import AbstractPipeline, CalibrationData
 from app.tools.extensions.identification_tool.pipeline.pipeline1 import Pipeline1
 from app.tools.extensions.identification_tool.pipeline.pipeline2 import Pipeline2
@@ -284,15 +284,24 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
         self._set_control_bar_enabled(False)
         self._save_config()
 
-        # Build OCR engine (stub for now — framework selection to be wired)
-        ocr_engine = StubOcrEngine()
+        # Build OCR engines from combo selections
+        detection_name = self._detection_framework_combo.currentText() if self._detection_framework_combo else "Tesseract"
+        ocr_name = self._ocr_framework_combo.currentText() if self._ocr_framework_combo else "Tesseract"
+        try:
+            detection_engine = create_engine(detection_name)
+            recognition_engine = create_engine(ocr_name)
+        except (ImportError, RuntimeError, ValueError) as exc:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "OCR Engine Error", str(exc))
+            self._stop()
+            return
 
         # Build pipeline
         pipeline_index = self._pipeline_combo.currentIndex() if self._pipeline_combo else 0
         if pipeline_index == 0:
-            self._current_pipeline = Pipeline1(ocr_engine, self)
+            self._current_pipeline = Pipeline1(detection_engine, recognition_engine, self)
         else:
-            self._current_pipeline = Pipeline2(ocr_engine, self)
+            self._current_pipeline = Pipeline2(detection_engine, recognition_engine, self)
 
         # Show calibration widget
         self._show_calibration_widget()

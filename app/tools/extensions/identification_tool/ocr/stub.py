@@ -6,6 +6,8 @@ exercised without any actual OCR library installed.
 
 from __future__ import annotations
 
+from PySide6.QtGui import QImage
+
 from app.tools.extensions.identification_tool.ocr.base import (
     AbstractOcrEngine,
     DetectedRegion,
@@ -21,11 +23,11 @@ class StubOcrEngine(AbstractOcrEngine):
     confidence 0.95.
     """
 
-    def detect_text_regions(self, image: "np.ndarray") -> list[DetectedRegion]:  # type: ignore[name-defined]
-        h, w = image.shape[:2]
+    def detect_text_regions(self, image: QImage) -> list[DetectedRegion]:
+        w, h = image.width(), image.height()
         rw, rh = w * 0.20, h * 0.10
         rx, ry = (w - rw) / 2, (h - rh) / 2
         return [DetectedRegion(x=rx, y=ry, width=rw, height=rh, confidence=0.95)]
 
-    def recognize_text(self, image: "np.ndarray") -> OcrResult:  # type: ignore[name-defined]
+    def recognize_text(self, image: QImage) -> OcrResult:
         return OcrResult(text="C001-01", confidence=0.95)

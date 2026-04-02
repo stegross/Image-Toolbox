@@ -192,11 +192,13 @@ class AbstractPipeline(QObject):
 
     def __init__(
         self,
-        ocr_engine: AbstractOcrEngine,
+        detection_engine: AbstractOcrEngine,
+        recognition_engine: AbstractOcrEngine,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
-        self._ocr_engine = ocr_engine
+        self._detection_engine = detection_engine
+        self._recognition_engine = recognition_engine
         self._stopped = False
 
     # ------------------------------------------------------------------

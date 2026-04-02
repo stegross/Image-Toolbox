@@ -46,16 +46,16 @@ DEFAULT_IDENTIFIER_CONFIGS: list[IdentifierConfig] = [
         description="Accept any OCR output without regex validation.",
     ),
     IdentifierConfig(
-        name="Standard C0xx-xx",
+        name="Standard Cxxx-yy",
         regex=r"C\d{3}-\d{2}",
         polarity="auto",
         description="Matches identifiers like C074-26.",
     ),
     IdentifierConfig(
-        name="Alphanumeric (4–8 chars)",
-        regex=r"[A-Z0-9]{4,8}",
+        name="Two-letter prefix + 1–4 digits",
+        regex=r"[A-Z]{2}\d{1,4}",
         polarity="auto",
-        description="Matches short uppercase alphanumeric codes.",
+        description="Matches identifiers like XD1 or XD0001 (2 uppercase letters, 1–4 digits).",
     ),
 ]
 
@@ -65,14 +65,14 @@ DEFAULT_IDENTIFIER_CONFIGS: list[IdentifierConfig] = [
 
 #: Names of supported text-detection frameworks.
 DETECTION_FRAMEWORKS: list[str] = [
-    "Stub (Testing)",
+    "Tesseract",
     "PaddleOCR",
     "EasyOCR",
 ]
 
 #: Names of supported OCR recognition frameworks.
 OCR_FRAMEWORKS: list[str] = [
-    "Stub (Testing)",
+    "Tesseract",
     "PaddleOCR",
     "EasyOCR",
 ]

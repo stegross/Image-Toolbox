@@ -5,12 +5,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from typing import TYPE_CHECKING
-
-from PySide6.QtCore import QObject, QRectF, QRunnable, QThreadPool, Signal
-
-if TYPE_CHECKING:
-    import numpy as np
+from PySide6.QtCore import QObject, QRect, QRectF, QRunnable, QThreadPool, Signal
+from PySide6.QtGui import QImage
 
 from app.tools.extensions.identification_tool.ocr.base import AbstractOcrEngine
 from app.tools.extensions.identification_tool.pipeline.base import (
@@ -23,8 +19,8 @@ from app.tools.extensions.identification_tool.pipeline.base import (
 from app.tools.extensions.identification_tool.pipeline.pipeline1 import (
     _OcrWorker,
     _WorkerSignals,
-    _crop,
-    _load_numpy,
+    _crop_qimage,
+    _load_qimage,
 )
 
 _logger = logging.getLogger("vi_toolbox.tools.scibit.pipeline2")
@@ -45,24 +41,24 @@ class _RoiTextDetectionWorker(QRunnable):
         self,
         image_path: Path,
         roi_bbox: BoundingBox,
-        ocr_engine: AbstractOcrEngine,
+        detection_engine: AbstractOcrEngine,
         signals: _WorkerSignals,
     ) -> None:
         super().__init__()
         self.setAutoDelete(True)
         self._path = image_path
         self._roi = roi_bbox
-        self._ocr_engine = ocr_engine
+        self._detection_engine = detection_engine
         self._signals = signals
 
     def run(self) -> None:  # noqa: N802
         try:
-            img = _load_numpy(self._path)
+            img = _load_qimage(self._path)
             if img is None:
                 self._signals.error.emit(f"Cannot read image: {self._path.name}")
                 return
-            crop = _crop(img, self._roi)
-            regions = self._ocr_engine.detect_text_regions(crop)
+            crop = _crop_qimage(img, self._roi)
+            regions = self._detection_engine.detect_text_regions(crop)
             if regions:
                 # Use the region closest to the ROI centre
                 roi_cx, roi_cy = self._roi.width / 2, self._roi.height / 2
@@ -90,7 +86,8 @@ class _BatchImageWorker2(QRunnable):
         image_path: Path,
         calib: CalibrationData,
         min_confidence: float,
-        ocr_engine: AbstractOcrEngine,
+        detection_engine: AbstractOcrEngine,
+        recognition_engine: AbstractOcrEngine,
         signals: _WorkerSignals,
     ) -> None:
         super().__init__()
@@ -98,12 +95,13 @@ class _BatchImageWorker2(QRunnable):
         self._path = image_path
         self._calib = calib
         self._min_confidence = min_confidence
-        self._ocr_engine = ocr_engine
+        self._detection_engine = detection_engine
+        self._recognition_engine = recognition_engine
         self._signals = signals
 
     def run(self) -> None:  # noqa: N802
         try:
-            img = _load_numpy(self._path)
+            img = _load_qimage(self._path)
             if img is None or self._calib.roi_bbox is None or self._calib.reference_resolution is None:
                 self._signals.batch_image_result.emit(
                     PipelineResult(
@@ -115,7 +113,7 @@ class _BatchImageWorker2(QRunnable):
                 )
                 return
 
-            h, w = img.shape[:2]
+            w, h = img.width(), img.height()
             ref_w, ref_h = self._calib.reference_resolution
 
             # Scale factors from reference resolution to current image
@@ -133,8 +131,8 @@ class _BatchImageWorker2(QRunnable):
                 height=min(h, roi.height * sy + 2 * th),
             )
 
-            crop = _crop(img, search)
-            regions = self._ocr_engine.detect_text_regions(crop)
+            crop = _crop_qimage(img, search)
+            regions = self._detection_engine.detect_text_regions(crop)
 
             if not regions:
                 self._signals.batch_image_result.emit(
@@ -161,8 +159,8 @@ class _BatchImageWorker2(QRunnable):
                 width=best.width,
                 height=best.height,
             )
-            id_crop = _crop(img, id_bbox)
-            ocr_result = self._ocr_engine.recognize_text(id_crop)
+            id_crop = _crop_qimage(img, id_bbox)
+            ocr_result = self._recognition_engine.recognize_text(id_crop)
             status = (
                 ResultStatus.ACCEPTED
                 if ocr_result.confidence >= self._min_confidence
@@ -201,8 +199,13 @@ class Pipeline2(AbstractPipeline):
     of that rectangle after rescaling to the reference resolution.
     """
 
-    def __init__(self, ocr_engine: AbstractOcrEngine, parent: QObject | None = None) -> None:
-        super().__init__(ocr_engine, parent)
+    def __init__(
+        self,
+        detection_engine: AbstractOcrEngine,
+        recognition_engine: AbstractOcrEngine,
+        parent: QObject | None = None,
+    ) -> None:
+        super().__init__(detection_engine, recognition_engine, parent)
         self._ref_image: Path | None = None
         self._roi_bbox: BoundingBox | None = None
         self._snapped_bbox: BoundingBox | None = None
@@ -231,7 +234,7 @@ class Pipeline2(AbstractPipeline):
         self._roi_bbox = BoundingBox.from_qrectf(rect)
         # Run text detection to snap to precise text boundary
         worker = _RoiTextDetectionWorker(
-            self._ref_image, self._roi_bbox, self._ocr_engine, self._signals
+            self._ref_image, self._roi_bbox, self._detection_engine, self._signals
         )
         QThreadPool.globalInstance().start(worker)
 
@@ -254,7 +257,7 @@ class Pipeline2(AbstractPipeline):
         if self._snapped_bbox is None:
             return
         worker = _OcrWorker(
-            self._ref_image, self._snapped_bbox, self._ocr_engine, self._signals
+            self._ref_image, self._snapped_bbox, self._recognition_engine, self._signals
         )
         QThreadPool.globalInstance().start(worker)
 
@@ -293,7 +296,7 @@ class Pipeline2(AbstractPipeline):
             return
 
         for path in images:
-            worker = _BatchImageWorker2(path, calib, min_confidence, self._ocr_engine, self._signals)
+            worker = _BatchImageWorker2(path, calib, min_confidence, self._detection_engine, self._recognition_engine, self._signals)
             QThreadPool.globalInstance().start(worker)
 
     def _on_batch_image_result(self, result: PipelineResult) -> None:
