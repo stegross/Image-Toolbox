@@ -173,6 +173,9 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
         # -- Connect control bar signals --
         self._select_folder_btn.clicked.connect(self._on_select_folder)
         self._start_btn.clicked.connect(self._on_start_stop)
+        if self._config_group:
+            self._config_group.toggled.connect(self._on_config_toggled)
+            self._on_config_toggled(self._config_group.isChecked())
 
         # Style the placeholder
         placeholder = self._process_area_frame.findChild(QLabel, "process_placeholder_label")
@@ -271,6 +274,9 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
             self._stop()
         else:
             self._start()
+
+    def _on_config_toggled(self, checked: bool) -> None:
+        self._apply_to_config_widgets(lambda w: w.setVisible(checked))
 
     # ------------------------------------------------------------------
     # Process management
@@ -374,9 +380,29 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
             if child.widget():
                 child.widget().deleteLater()
 
+    def _apply_to_config_widgets(self, fn) -> None:
+        """Apply *fn(widget)* to every widget inside the config form layout."""
+        from PySide6.QtWidgets import QFormLayout
+        if self._config_group is None:
+            return
+        form: QFormLayout = self._config_group.layout()
+        for row in range(form.rowCount()):
+            for role in (QFormLayout.ItemRole.LabelRole, QFormLayout.ItemRole.FieldRole, QFormLayout.ItemRole.SpanningRole):
+                item = form.itemAt(row, role)
+                if item is None:
+                    continue
+                if item.widget():
+                    fn(item.widget())
+                elif item.layout():
+                    nested = item.layout()
+                    for j in range(nested.count()):
+                        child = nested.itemAt(j)
+                        if child and child.widget():
+                            fn(child.widget())
+
     def _set_control_bar_enabled(self, enabled: bool) -> None:
         """Enable/disable all control bar widgets except the Start/Stop button."""
         if self._select_folder_btn:
             self._select_folder_btn.setEnabled(enabled)
-        if self._config_group:
-            self._config_group.setEnabled(enabled)
+        # Disable form children individually so the groupbox toggle stays clickable
+        self._apply_to_config_widgets(lambda w: w.setEnabled(enabled))
