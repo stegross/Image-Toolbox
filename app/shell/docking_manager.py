@@ -123,4 +123,10 @@ class DockingManager:
         bool
             ``True`` if the restore succeeded.
         """
-        return self._dock_manager.restoreState(state)
+        result = self._dock_manager.restoreState(state)
+        # Qt ADS can restore dock widgets in a closed/hidden state (e.g. when
+        # they were a non-active tab).  Force all session-tracked widgets visible.
+        for dock in self._dock_widgets.values():
+            if dock.isClosed():
+                dock.toggleView(True)
+        return result
