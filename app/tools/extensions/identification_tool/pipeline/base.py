@@ -92,13 +92,16 @@ class ResultStatus(enum.Enum):
     """Outcome classification for a single processed image."""
 
     ACCEPTED = "accepted"
-    """OCR confidence met the threshold; file was renamed."""
+    """OCR confidence met the threshold; file was auto-renamed."""
+
+    PENDING = "pending"
+    """OCR confidence met the threshold but manual confirmation is required before renaming."""
 
     FAILED = "failed"
     """OCR confidence too low or no text found; needs manual review."""
 
     MANUAL = "manual"
-    """User manually provided the identifier during the review phase."""
+    """User manually confirmed and renamed the file during the review phase."""
 
 
 @dataclass
@@ -124,6 +127,34 @@ class PipelineResult:
     confidence: float
     status: ResultStatus
     new_path: Path | None = None
+
+
+# ---------------------------------------------------------------------------
+# Rename helper
+# ---------------------------------------------------------------------------
+
+
+def rename_to_identifier(path: Path, identifier: str) -> Path | None:
+    """Rename *path* using *identifier* as the new stem.
+
+    Appends a numeric suffix on conflict.  Returns the new path on success,
+    or ``None`` if the rename failed.
+    """
+    import logging
+    _log = logging.getLogger("vi_toolbox.tools.scibit.pipeline")
+    new_name = f"{identifier}_{path.name}"
+    candidate = path.parent / new_name
+    counter = 1
+    while candidate.exists() and candidate != path:
+        candidate = path.parent / f"{identifier}_{counter}_{path.name}"
+        counter += 1
+    try:
+        path.rename(candidate)
+        _log.info("Renamed: %s -> %s", path.name, candidate.name)
+        return candidate
+    except OSError as exc:
+        _log.error("Rename failed: %s -> %s: %s", path.name, candidate.name, exc)
+        return None
 
 
 # ---------------------------------------------------------------------------

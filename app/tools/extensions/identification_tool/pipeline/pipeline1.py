@@ -15,6 +15,7 @@ from app.tools.extensions.identification_tool.pipeline.base import (
     CalibrationData,
     PipelineResult,
     ResultStatus,
+    rename_to_identifier,
 )
 
 _logger = logging.getLogger("vi_toolbox.tools.scibit.pipeline1")
@@ -181,6 +182,7 @@ class _BatchImageWorker(QRunnable):
         min_confidence: float,
         recognition_engine: AbstractOcrEngine,
         signals: _WorkerSignals,
+        rename_preview: bool = False,
     ) -> None:
         super().__init__()
         self.setAutoDelete(True)
@@ -189,6 +191,7 @@ class _BatchImageWorker(QRunnable):
         self._min_confidence = min_confidence
         self._recognition_engine = recognition_engine
         self._signals = signals
+        self._rename_preview = rename_preview
 
     def run(self) -> None:  # noqa: N802
         try:
@@ -214,16 +217,25 @@ class _BatchImageWorker(QRunnable):
             )
             crop = _crop_qimage(img, id_bbox)
             ocr_result = self._recognition_engine.recognize_text(crop)
-            status = (
-                ResultStatus.ACCEPTED
-                if ocr_result.confidence >= self._min_confidence
-                else ResultStatus.FAILED
+            accepted = (
+                ocr_result.confidence >= self._min_confidence
+                and bool(ocr_result.text.strip())
             )
+            new_path: Path | None = None
+            if accepted and self._rename_preview:
+                status = ResultStatus.PENDING
+            elif accepted:
+                new_path = rename_to_identifier(self._path, ocr_result.text.strip())
+                status = ResultStatus.ACCEPTED if new_path else ResultStatus.FAILED
+            else:
+                status = ResultStatus.FAILED
+
             self._signals.batch_image_result.emit(PipelineResult(
                 original_path=self._path,
                 recognized_text=ocr_result.text,
                 confidence=ocr_result.confidence,
                 status=status,
+                new_path=new_path,
             ))
         except Exception as exc:  # noqa: BLE001
             _logger.warning("Batch processing error for %s: %s", self._path.name, exc)
@@ -409,7 +421,8 @@ class Pipeline1(AbstractPipeline):
     # ------------------------------------------------------------------
 
     def start_batch(
-        self, images: list[Path], calib: CalibrationData, min_confidence: float
+        self, images: list[Path], calib: CalibrationData, min_confidence: float,
+        rename_preview: bool = False,
     ) -> None:
         self._stopped = False
         self._min_confidence = min_confidence
@@ -423,7 +436,10 @@ class Pipeline1(AbstractPipeline):
             return
 
         for path in images:
-            worker = _BatchImageWorker(path, calib, min_confidence, self._recognition_engine, self._signals)
+            worker = _BatchImageWorker(
+                path, calib, min_confidence, self._recognition_engine, self._signals,
+                rename_preview=rename_preview,
+            )
             QThreadPool.globalInstance().start(worker)
 
     def _on_batch_image_result(self, result: PipelineResult) -> None:

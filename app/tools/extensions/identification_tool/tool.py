@@ -357,7 +357,8 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
         # Exclude reference image from batch
         batch_images = self._images[1:]
         min_conf = self._min_confidence_spin.value() if self._min_confidence_spin else 0.75
-        self._current_pipeline.start_batch(batch_images, self._calib_data, min_conf)
+        rename_preview = self._rename_preview_check.isChecked() if self._rename_preview_check else False
+        self._current_pipeline.start_batch(batch_images, self._calib_data, min_conf, rename_preview=rename_preview)
 
     def _on_batch_complete(self) -> None:
         self._running = False

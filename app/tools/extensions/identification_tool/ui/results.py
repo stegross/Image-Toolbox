@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
-    QMessageBox,
     QProgressBar,
     QPushButton,
     QSizePolicy,
@@ -29,6 +28,7 @@ from app.tools.extensions.identification_tool.pipeline.base import (
     CalibrationData,
     PipelineResult,
     ResultStatus,
+    rename_to_identifier,
 )
 
 _logger = logging.getLogger("vi_toolbox.tools.scibit.results")
@@ -37,16 +37,18 @@ _logger = logging.getLogger("vi_toolbox.tools.scibit.results")
 # Result list item colours
 # ---------------------------------------------------------------------------
 
-_COLOR_ACCEPTED = QColor(180, 230, 180)   # green tint
-_COLOR_FAILED = QColor(240, 180, 180)     # red tint
-_COLOR_MANUAL = QColor(255, 235, 150)     # yellow tint
+_COLOR_ACCEPTED = QColor(180, 230, 180)   # green  — auto-renamed
+_COLOR_PENDING  = QColor(255, 235, 150)   # yellow — accepted, awaiting manual confirmation
+_COLOR_FAILED   = QColor(240, 180, 180)   # red    — OCR failed, needs review
+_COLOR_MANUAL   = QColor(160, 200, 240)   # blue   — manually confirmed and renamed
 
 
 def _item_color(status: ResultStatus) -> QColor:
     return {
         ResultStatus.ACCEPTED: _COLOR_ACCEPTED,
-        ResultStatus.FAILED: _COLOR_FAILED,
-        ResultStatus.MANUAL: _COLOR_MANUAL,
+        ResultStatus.PENDING:  _COLOR_PENDING,
+        ResultStatus.FAILED:   _COLOR_FAILED,
+        ResultStatus.MANUAL:   _COLOR_MANUAL,
     }[status]
 
 
@@ -208,7 +210,7 @@ class ResultsWidget(QWidget):
         self._pipeline = pipeline
         # {original_path_str -> (result, QListWidgetItem)}
         self._result_map: dict[str, tuple[PipelineResult, QListWidgetItem]] = {}
-        self._failed_paths: list[str] = []   # ordered list of failed path strings
+        self._review_paths: list[str] = []   # ordered list of FAILED + PENDING path strings
         self._review_index: int = -1
 
         self._setup_ui()
@@ -268,8 +270,8 @@ class ResultsWidget(QWidget):
         item = self._make_list_item(result)
         self._list_widget.addItem(item)
         self._result_map[path_str] = (result, item)
-        if result.status == ResultStatus.FAILED:
-            self._failed_paths.append(path_str)
+        if result.status in (ResultStatus.FAILED, ResultStatus.PENDING):
+            self._review_paths.append(path_str)
         self._update_summary()
 
     def _on_progress_updated(self, current: int, total: int) -> None:
@@ -311,18 +313,17 @@ class ResultsWidget(QWidget):
             return
         result, _ = self._result_map[path_str]
         if result.status == ResultStatus.ACCEPTED:
-            return  # no review needed for accepted files
-        # Show review panel with this item
-        if path_str in self._failed_paths:
-            self._review_index = self._failed_paths.index(path_str)
+            return  # no review needed for auto-renamed files
+        if path_str in self._review_paths:
+            self._review_index = self._review_paths.index(path_str)
         else:
             self._review_index = 0
         self._show_review_for_current()
 
     def _show_review_for_current(self) -> None:
-        if not self._failed_paths or self._review_index < 0:
+        if not self._review_paths or self._review_index < 0:
             return
-        path_str = self._failed_paths[self._review_index]
+        path_str = self._review_paths[self._review_index]
         if path_str not in self._result_map:
             return
         result, _ = self._result_map[path_str]
@@ -330,9 +331,8 @@ class ResultsWidget(QWidget):
         self._review_panel.load_result(result)
         self._review_panel.set_navigation_state(
             has_prev=self._review_index > 0,
-            has_next=self._review_index < len(self._failed_paths) - 1,
+            has_next=self._review_index < len(self._review_paths) - 1,
         )
-        # Highlight the current item in the list
         for ps, (_, item) in self._result_map.items():
             item.setSelected(ps == path_str)
 
@@ -342,10 +342,9 @@ class ResultsWidget(QWidget):
 
     def _on_rename_applied(self, original_path: Path, new_name: str) -> None:
         path_str = str(original_path)
-        new_path = _apply_rename(original_path, new_name)
+        new_path = rename_to_identifier(original_path, new_name)
         if new_path is None:
             return
-        # Update result record
         if path_str in self._result_map:
             old_result, item = self._result_map[path_str]
             new_result = PipelineResult(
@@ -356,17 +355,14 @@ class ResultsWidget(QWidget):
                 new_path=new_path,
             )
             self._result_map[path_str] = (new_result, item)
-            # Update list item text and colour
             item.setText(f"{original_path.name} → {new_path.name}\n  Manual  |  ✓")
             item.setBackground(QBrush(_item_color(ResultStatus.MANUAL)))
-        # Remove from failed list
-        if path_str in self._failed_paths:
-            self._failed_paths.remove(path_str)
-            if self._review_index >= len(self._failed_paths):
-                self._review_index = max(0, len(self._failed_paths) - 1)
+        if path_str in self._review_paths:
+            self._review_paths.remove(path_str)
+            if self._review_index >= len(self._review_paths):
+                self._review_index = max(0, len(self._review_paths) - 1)
         self._update_summary()
-        # Advance to next failed entry or hide panel if done
-        if self._failed_paths:
+        if self._review_paths:
             self._show_review_for_current()
         else:
             self._review_panel.hide()
@@ -375,9 +371,9 @@ class ResultsWidget(QWidget):
         self._on_navigate(1)
 
     def _on_navigate(self, delta: int) -> None:
-        if not self._failed_paths:
+        if not self._review_paths:
             return
-        self._review_index = max(0, min(len(self._failed_paths) - 1, self._review_index + delta))
+        self._review_index = max(0, min(len(self._review_paths) - 1, self._review_index + delta))
         self._show_review_for_current()
 
     # ------------------------------------------------------------------
@@ -386,16 +382,15 @@ class ResultsWidget(QWidget):
 
     def _update_summary(self) -> None:
         total = len(self._result_map)
-        accepted = sum(
-            1 for r, _ in self._result_map.values() if r.status == ResultStatus.ACCEPTED
-        )
-        manual = sum(
-            1 for r, _ in self._result_map.values() if r.status == ResultStatus.MANUAL
-        )
-        failed = len(self._failed_paths)
-        self._summary_label.setText(
-            f"Total: {total}  |  Accepted: {accepted}  |  Manual: {manual}  |  Pending review: {failed}"
-        )
+        accepted = sum(1 for r, _ in self._result_map.values() if r.status == ResultStatus.ACCEPTED)
+        pending  = sum(1 for r, _ in self._result_map.values() if r.status == ResultStatus.PENDING)
+        manual   = sum(1 for r, _ in self._result_map.values() if r.status == ResultStatus.MANUAL)
+        failed   = sum(1 for r, _ in self._result_map.values() if r.status == ResultStatus.FAILED)
+        parts = [f"Total: {total}", f"Accepted: {accepted}"]
+        if pending:
+            parts.append(f"Pending: {pending}")
+        parts += [f"Manual: {manual}", f"Failed: {failed}"]
+        self._summary_label.setText("  |  ".join(parts))
 
 
 # ---------------------------------------------------------------------------
@@ -403,29 +398,3 @@ class ResultsWidget(QWidget):
 # ---------------------------------------------------------------------------
 
 
-def _apply_rename(original: Path, new_stem: str) -> Path | None:
-    """Rename *original* to ``<new_stem><suffix>``, with numeric suffix on conflict.
-
-    Returns
-    -------
-    Path | None
-        The actual new path, or ``None`` on error.
-    """
-    suffix = original.suffix
-    candidate = original.parent / (new_stem + suffix)
-    counter = 1
-    while candidate.exists() and candidate != original:
-        candidate = original.parent / f"{new_stem}_{counter}{suffix}"
-        counter += 1
-    try:
-        original.rename(candidate)
-        _logger.info("Renamed: %s -> %s", original.name, candidate.name)
-        return candidate
-    except OSError as exc:
-        _logger.error("Rename failed: %s -> %s: %s", original.name, candidate.name, exc)
-        QMessageBox.warning(
-            None,
-            "Rename Failed",
-            f"Could not rename {original.name}:\n{exc}",
-        )
-        return None
