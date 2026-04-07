@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QLabel,
     QSizePolicy,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -46,6 +47,17 @@ class PanZoomView(QGraphicsView):
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._fit_item: QGraphicsPixmapItem | None = None
+
+    def set_fit_item(self, item: QGraphicsPixmapItem) -> None:
+        """Register the pixmap item to auto-fit whenever the view is resized."""
+        self._fit_item = item
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        """Re-fit the registered item after Qt has updated the viewport size."""
+        super().resizeEvent(event)
+        if self._fit_item and not self._fit_item.pixmap().isNull():
+            self.fitInView(self._fit_item, Qt.AspectRatioMode.KeepAspectRatio)
 
     def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
         """Zoom in/out on scroll wheel."""
@@ -85,6 +97,13 @@ class ImageArea(QWidget):
         self._scene.addItem(self._pixmap_item)
 
         self._view = self._create_view()
+        self._view.set_fit_item(self._pixmap_item)
+
+        # Layout manages view geometry — avoids manual setGeometry timing issues.
+        _layout = QVBoxLayout(self)
+        _layout.setContentsMargins(0, 0, 0, 0)
+        _layout.setSpacing(0)
+        _layout.addWidget(self._view)
 
         # HUD overlay labels (children of this widget, drawn on top of the view)
         self._folder_label = self._make_overlay_label()
@@ -209,8 +228,6 @@ class ImageArea(QWidget):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
-        self._view.setGeometry(self.rect())
-        self._fit_pixmap()
         self._reposition_overlays()
 
     def _reposition_overlays(self) -> None:
