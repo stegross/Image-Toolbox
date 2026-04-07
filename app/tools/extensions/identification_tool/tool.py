@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from abc import ABCMeta
 from pathlib import Path
 from typing import ClassVar
@@ -310,6 +311,9 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
         else:
             self._current_pipeline = Pipeline2(detection_engine, recognition_engine, self)
 
+        self._t_start = time.monotonic()
+        self._t_calib_done: float | None = None
+
         # Show calibration widget
         self._show_calibration_widget()
 
@@ -338,8 +342,9 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
 
     def _on_calibration_complete(self, calib_data: CalibrationData) -> None:
         self._calib_data = calib_data
+        self._t_calib_done = time.monotonic()
         self._logger.info(
-            "Calibration complete. Reference identifier: %s", calib_data.reference_identifier
+            "Calibration complete. Reference identifier: %s", calib_data.reference_identifier,
         )
         self._show_results_widget()
 
@@ -365,7 +370,18 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
         self._start_btn.setText("Start")
         self._start_btn.setEnabled(bool(self._images))
         self._set_control_bar_enabled(True)
-        self._logger.info("Batch processing complete.")
+        t_now = time.monotonic()
+        n = len(self._images)
+        if self._t_calib_done is not None and n > 0:
+            calib_secs = self._t_calib_done - self._t_start
+            batch_secs = t_now - self._t_calib_done
+            avg_secs = batch_secs / n
+            self._logger.info(
+                "Timing summary —  Calibration: %.1f s  |  Batch: %.1f s  |  Images: %d  |  Avg per image: %.2f s",
+                calib_secs, batch_secs, n, avg_secs,
+            )
+        else:
+            self._logger.info("Batch processing complete.")
 
     def _show_placeholder(self) -> None:
         self._clear_process_area()

@@ -113,18 +113,18 @@ class _OverlayImageArea(ImageArea):
     def stop_roi_selection(self) -> None:
         self._view.stop_roi_selection()  # type: ignore[attr-defined]
 
-    def show_rect_overlay(self, rect: QRectF, color: QColor | None = None) -> QGraphicsRectItem:
+    def show_rect_overlay(self, rect: QRectF, color: QColor | None = None, width: int = 8) -> QGraphicsRectItem:
         """Draw a rectangle overlay on the scene and return the item."""
-        pen = QPen(color or QColor(255, 165, 0))
-        pen.setWidth(2)
+        pen = QPen(color or QColor(255, 0, 255))
+        pen.setWidth(width)
         item = QGraphicsRectItem(rect)
         item.setPen(pen)
         self._scene.addItem(item)
         return item
 
-    def show_rects_overlay(self, rects: list[QRectF], color: QColor | None = None) -> list[QGraphicsRectItem]:
+    def show_rects_overlay(self, rects: list[QRectF], color: QColor | None = None, width: int = 8) -> list[QGraphicsRectItem]:
         """Draw multiple rectangle overlays."""
-        return [self.show_rect_overlay(r, color) for r in rects]
+        return [self.show_rect_overlay(r, color, width) for r in rects]
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +386,7 @@ class CalibrationWidget(QWidget):
         self._detected_rects = rects
         self._step_indicator.set_step(4, 5, "Select the identifier region")
         self._image_area.clear_overlays()
-        self._overlay_items = self._image_area.show_rects_overlay(rects, QColor(255, 165, 0))
+        self._overlay_items = self._image_area.show_rects_overlay(rects, QColor(255, 0, 255))
         info = QLabel("Click a highlighted region, or draw manually.", self)
         self._set_buttons([("manual_id", "Draw Manually"), ("cancel", "Cancel")], skip=False)
         self._button_bar.button("manual_id").clicked.connect(self._on_manual_identifier)
