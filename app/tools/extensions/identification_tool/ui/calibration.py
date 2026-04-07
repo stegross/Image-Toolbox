@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QPoint, QRect, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QKeySequence, QPen, QPixmap, QShortcut
+from PySide6.QtGui import QColor, QKeySequence, QPen
 from PySide6.QtWidgets import (
     QGraphicsRectItem,
     QGraphicsView,
@@ -235,12 +235,14 @@ class CalibrationWidget(QWidget):
     def __init__(
         self,
         pipeline: AbstractPipeline,
-        image_path: Path,
+        image_paths: list[Path],
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._pipeline = pipeline
-        self._image_path = image_path
+        self._image_paths = image_paths
+        self._image_index = 0
+        self._image_path = image_paths[0]
         self._detected_rects: list[QRectF] = []
         self._overlay_items: list[QGraphicsRectItem] = []
 
@@ -272,11 +274,7 @@ class CalibrationWidget(QWidget):
         self._button_bar = _ButtonBar(self)
         layout.addWidget(self._button_bar)
 
-        # Load the reference image
-        pixmap = QPixmap(str(self._image_path))
-        if not pixmap.isNull():
-            self._image_area.set_pixmap(pixmap)
-            self._image_area.set_filename_text(self._image_path.name)
+        self._load_current_image()
 
     def _connect_pipeline_signals(self) -> None:
         self._pipeline.chip_detected.connect(self._on_chip_detected)
@@ -291,6 +289,16 @@ class CalibrationWidget(QWidget):
     # Pipeline state driver
     # ------------------------------------------------------------------
 
+    def _load_current_image(self) -> None:
+        from PySide6.QtGui import QPixmap
+        self._image_path = self._image_paths[self._image_index]
+        pixmap = QPixmap(str(self._image_path))
+        if not pixmap.isNull():
+            self._image_area.set_pixmap(pixmap)
+            self._image_area.set_filename_text(
+                f"{self._image_path.name}  ({self._image_index + 1}/{len(self._image_paths)})"
+            )
+
     def _start(self) -> None:
         from app.tools.extensions.identification_tool.pipeline.pipeline2 import Pipeline2
 
@@ -298,12 +306,22 @@ class CalibrationWidget(QWidget):
             self._step_indicator.set_step(1, 4, "Draw ROI around the identifier")
             self._image_area.start_roi_selection()
             self._set_buttons([("cancel", "Cancel")])
-            self._button_bar.button("cancel").clicked.connect(self.calibration_cancelled)
         else:
             self._step_indicator.set_step(1, 5, "Detecting chip boundary…")
             self._set_buttons([("cancel", "Cancel")])
-            self._button_bar.button("cancel").clicked.connect(self.calibration_cancelled)
             self._pipeline.start_calibration(self._image_path)
+
+        self._button_bar.button("cancel").clicked.connect(self.calibration_cancelled)
+
+    def _on_skip_image(self) -> None:
+        """Skip current calibration image and try the next one."""
+        if self._image_index >= len(self._image_paths) - 1:
+            return
+        self._image_index += 1
+        self._image_area.clear_overlays()
+        self._load_current_image()
+        self._pipeline._stopped = False
+        self._start()
 
     # --- Pipeline 1 callbacks ---
 
@@ -370,7 +388,7 @@ class CalibrationWidget(QWidget):
         self._image_area.clear_overlays()
         self._overlay_items = self._image_area.show_rects_overlay(rects, QColor(255, 165, 0))
         info = QLabel("Click a highlighted region, or draw manually.", self)
-        self._set_buttons([("manual_id", "Draw Manually"), ("cancel", "Cancel")])
+        self._set_buttons([("manual_id", "Draw Manually"), ("cancel", "Cancel")], skip=False)
         self._button_bar.button("manual_id").clicked.connect(self._on_manual_identifier)
         self._button_bar.button("cancel").clicked.connect(self.calibration_cancelled)
         self._roi_mode = "identifier_click"
@@ -387,7 +405,7 @@ class CalibrationWidget(QWidget):
         rect = item.rect() if hasattr(item, "rect") else item.boundingRect()
         self._image_area.scene().selectionChanged.disconnect(self._on_scene_selection_changed)
         self._step_indicator.set_step(5, 5, "Running OCR…")
-        self._set_buttons([("cancel", "Cancel")])
+        self._set_buttons([("cancel", "Cancel")], skip=False)
         self._button_bar.button("cancel").clicked.connect(self.calibration_cancelled)
         from app.tools.extensions.identification_tool.pipeline.pipeline1 import Pipeline1
         if isinstance(self._pipeline, Pipeline1):
@@ -397,7 +415,7 @@ class CalibrationWidget(QWidget):
         self._image_area.start_roi_selection()
         self._roi_mode = "identifier"
         self._step_indicator.set_step(4, 5, "Draw the identifier region")
-        self._set_buttons([("cancel", "Cancel")])
+        self._set_buttons([("cancel", "Cancel")], skip=False)
         self._button_bar.button("cancel").clicked.connect(self.calibration_cancelled)
 
     # --- Pipeline 2 callbacks ---
@@ -419,7 +437,7 @@ class CalibrationWidget(QWidget):
             if isinstance(self._pipeline, Pipeline1):
                 self._pipeline.set_identifier_bbox(rect)
                 self._step_indicator.set_step(5, 5, "Running OCR…")
-                self._set_buttons([("cancel", "Cancel")])
+                self._set_buttons([("cancel", "Cancel")], skip=False)
                 self._button_bar.button("cancel").clicked.connect(self.calibration_cancelled)
         else:
             # Pipeline 2 ROI
@@ -461,7 +479,7 @@ class CalibrationWidget(QWidget):
             f"Confirm OCR result (confidence: {confidence:.0%})",
         )
         self._ocr_panel.show_result(text)
-        self._set_buttons([])  # confirm comes from the OCR panel button
+        self._set_buttons([], skip=False)  # confirm comes from the OCR panel button
 
     def _on_ocr_confirmed(self, text: str) -> None:
         self._ocr_panel.hide()
@@ -478,8 +496,16 @@ class CalibrationWidget(QWidget):
     # Helpers
     # ------------------------------------------------------------------
 
-    def _set_buttons(self, specs: list[tuple[str, str]]) -> None:
-        self._button_bar.set_buttons(specs)
+    def _skip_spec(self) -> list[tuple[str, str]]:
+        """Return a Skip Image button spec when more images are available."""
+        return [("skip_calib", "Skip Image")] if self._image_index < len(self._image_paths) - 1 else []
+
+    def _set_buttons(self, specs: list[tuple[str, str]], skip: bool = True) -> None:
+        prefix = self._skip_spec() if skip else []
+        self._button_bar.set_buttons(prefix + specs)
+        skip_btn = self._button_bar.button("skip_calib")
+        if skip_btn:
+            skip_btn.clicked.connect(self._on_skip_image)
 
     @staticmethod
     def _polygon_to_qrectf(polygon: list[tuple[float, float]]) -> QRectF:

@@ -329,7 +329,7 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
         self._clear_process_area()
         widget = CalibrationWidget(
             pipeline=self._current_pipeline,
-            image_path=self._images[0],
+            image_paths=self._images,
             parent=self._process_area_frame,
         )
         widget.calibration_complete.connect(self._on_calibration_complete)
@@ -354,8 +354,8 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
         widget.batch_complete.connect(self._on_batch_complete)
         self._process_area_frame.layout().addWidget(widget)
 
-        # Exclude reference image from batch
-        batch_images = self._images[1:]
+        # All images go into the batch (calibration image included)
+        batch_images = self._images
         min_conf = self._min_confidence_spin.value() if self._min_confidence_spin else 0.75
         rename_preview = self._rename_preview_check.isChecked() if self._rename_preview_check else False
         self._current_pipeline.start_batch(batch_images, self._calib_data, min_conf, rename_preview=rename_preview)

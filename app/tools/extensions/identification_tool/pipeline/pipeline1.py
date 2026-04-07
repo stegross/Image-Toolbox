@@ -86,32 +86,6 @@ def _touches_border(contour, w: int, h: int, margin: int) -> bool:
     return False
 
 
-class _ChipDetectionStubWorker(QRunnable):
-    """Fallback chip detection when OpenCV is unavailable."""
-
-    def __init__(self, image_path: Path, signals: _WorkerSignals) -> None:
-        super().__init__()
-        self.setAutoDelete(True)
-        self._path = image_path
-        self._signals = signals
-
-    def run(self) -> None:  # noqa: N802
-        try:
-            from PySide6.QtGui import QImageReader
-            reader = QImageReader(str(self._path))
-            size = reader.size()
-            w, h = (size.width(), size.height()) if size.isValid() else (1000, 800)
-            pad_x, pad_y = w * 0.05, h * 0.05
-            cw, ch = w * 0.90, h * 0.90
-            polygon = [
-                (pad_x, pad_y), (pad_x + cw, pad_y),
-                (pad_x + cw, pad_y + ch), (pad_x, pad_y + ch),
-            ]
-            self._signals.chip_result.emit(polygon, 0.5)
-        except Exception as exc:  # noqa: BLE001
-            self._signals.chip_failed.emit(str(exc))
-
-
 class _TextDetectionWorker(QRunnable):
     def __init__(
         self,
