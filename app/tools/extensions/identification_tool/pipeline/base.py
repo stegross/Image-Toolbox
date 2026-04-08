@@ -1,13 +1,14 @@
-"""Shared data structures and abstract pipeline base class."""
+"""Shared data structures, helpers, and abstract base classes."""
 
 from __future__ import annotations
 
 import enum
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from abc import abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRectF, Signal
+from PySide6.QtCore import QObject, QRect, QRectF, QRunnable, Signal
+from PySide6.QtGui import QImage
 
 from app.tools.extensions.identification_tool.ocr.base import AbstractOcrEngine
 
@@ -19,18 +20,7 @@ from app.tools.extensions.identification_tool.ocr.base import AbstractOcrEngine
 
 @dataclass
 class BoundingBox:
-    """Axis-aligned bounding box.
-
-    Coordinates may be either absolute pixels or normalised fractions
-    depending on context — callers must track which unit they store.
-
-    Parameters
-    ----------
-    x, y : float
-        Top-left corner.
-    width, height : float
-        Dimensions.
-    """
+    """Axis-aligned bounding box in either pixel or normalised coordinates."""
 
     x: float
     y: float
@@ -38,53 +28,24 @@ class BoundingBox:
     height: float
 
     def to_qrectf(self) -> QRectF:
-        """Convert to a :class:`QRectF`."""
         return QRectF(self.x, self.y, self.width, self.height)
 
     @staticmethod
     def from_qrectf(rect: QRectF) -> "BoundingBox":
-        """Create from a :class:`QRectF`."""
         return BoundingBox(rect.x(), rect.y(), rect.width(), rect.height())
 
 
 @dataclass
 class CalibrationData:
-    """Reference data collected during the first-image calibration phase.
+    """Base class for pipeline-specific calibration results.
 
-    Only the fields relevant to the chosen pipeline are populated; the
-    rest remain ``None``.
+    Each pipeline defines its own subclass containing only the fields it
+    needs — no more optional union fields that only one pipeline uses.
 
-    Parameters
-    ----------
-    chip_bbox : BoundingBox | None
-        Absolute pixel bounding box of the chip in the reference image
-        (Pipeline 1).
-    identifier_bbox_norm : BoundingBox | None
-        Identifier position and size expressed as proportions of
-        ``chip_bbox`` (Pipeline 1).
-    chip_aspect_ratio : float | None
-        Width / height of the chip bounding box (Pipeline 1).
-    roi_bbox : BoundingBox | None
-        Absolute pixel bounding box of the ROI in the reference image
-        (Pipeline 2).
-    reference_resolution : tuple[int, int] | None
-        ``(width, height)`` of the reference image (Pipeline 2).
-    polarity : str
-        ``"dark_on_light"`` or ``"light_on_dark"``.
-    base_rotation : float
-        Estimated in-plane rotation of the identifier in degrees.
-    reference_identifier : str
-        User-confirmed identifier text from the first image, used for
-        batch pattern consistency checking.
+    The single shared field is ``reference_identifier``: the user-confirmed
+    OCR text from the first image, common to every pipeline.
     """
 
-    chip_bbox: BoundingBox | None = None
-    identifier_bbox_norm: BoundingBox | None = None
-    chip_aspect_ratio: float | None = None
-    roi_bbox: BoundingBox | None = None
-    reference_resolution: tuple[int, int] | None = None
-    polarity: str = "dark_on_light"
-    base_rotation: float = 0.0
     reference_identifier: str = ""
 
 
@@ -95,32 +56,18 @@ class ResultStatus(enum.Enum):
     """OCR confidence met the threshold; file was auto-renamed."""
 
     PENDING = "pending"
-    """OCR confidence met the threshold but manual confirmation is required before renaming."""
+    """OCR confidence met threshold but manual confirmation required."""
 
     FAILED = "failed"
     """OCR confidence too low or no text found; needs manual review."""
 
     MANUAL = "manual"
-    """User manually confirmed and renamed the file during the review phase."""
+    """User manually confirmed and renamed the file during review."""
 
 
 @dataclass
 class PipelineResult:
-    """Processing outcome for a single image.
-
-    Parameters
-    ----------
-    original_path : Path
-        The original image file path.
-    recognized_text : str | None
-        Best OCR guess, or ``None`` if detection failed entirely.
-    confidence : float
-        OCR confidence in ``[0.0, 1.0]``; ``-1.0`` if not available.
-    status : ResultStatus
-        Whether the result was accepted, failed, or manually corrected.
-    new_path : Path | None
-        Set to the renamed path after renaming; ``None`` until then.
-    """
+    """Processing outcome for a single image."""
 
     original_path: Path
     recognized_text: str | None
@@ -135,10 +82,10 @@ class PipelineResult:
 
 
 def rename_to_identifier(path: Path, identifier: str) -> Path | None:
-    """Rename *path* using *identifier* as the new stem.
+    """Rename *path* to ``{identifier}_{original_name}``.
 
     Appends a numeric suffix on conflict.  Returns the new path on success,
-    or ``None`` if the rename failed.
+    ``None`` on failure.
     """
     import logging
     _log = logging.getLogger("vi_toolbox.tools.scibit.pipeline")
@@ -158,6 +105,75 @@ def rename_to_identifier(path: Path, identifier: str) -> Path | None:
 
 
 # ---------------------------------------------------------------------------
+# Shared background-worker signals and helpers
+# (defined here so neither pipeline file imports from the other)
+# ---------------------------------------------------------------------------
+
+
+class WorkerSignals(QObject):
+    """Qt signals used by background QRunnable workers.
+
+    All signal names are generic.  Pipelines connect only the ones they use.
+    ``chip_result`` / ``chip_failed`` are Pipeline-1-specific but live here
+    so that :class:`Pipeline2` workers can reuse the same signal bus.
+    """
+
+    chip_result = Signal(list, float)    # (polygon, confidence)
+    chip_failed = Signal(str)
+    text_regions_result = Signal(list)   # list[QRectF]
+    ocr_result = Signal(str, float)      # (text, confidence)
+    batch_image_result = Signal(object)  # PipelineResult
+    error = Signal(str)
+
+
+def load_qimage(path: Path) -> QImage | None:
+    """Load *path* as a greyscale QImage, or ``None`` on failure."""
+    img = QImage(str(path))
+    if img.isNull():
+        return None
+    return img.convertToFormat(QImage.Format.Format_Grayscale8)
+
+
+def crop_qimage(img: QImage, bbox: BoundingBox) -> QImage:
+    """Return a copy of *img* cropped to *bbox*, clamped to image bounds."""
+    x = max(0, int(bbox.x))
+    y = max(0, int(bbox.y))
+    w = min(img.width() - x, max(1, int(bbox.width)))
+    h = min(img.height() - y, max(1, int(bbox.height)))
+    return img.copy(QRect(x, y, w, h))
+
+
+class OcrWorker(QRunnable):
+    """Background worker: runs OCR on a single cropped region."""
+
+    def __init__(
+        self,
+        image_path: Path,
+        identifier_bbox: BoundingBox,
+        recognition_engine: AbstractOcrEngine,
+        signals: WorkerSignals,
+    ) -> None:
+        super().__init__()
+        self.setAutoDelete(True)
+        self._path = image_path
+        self._bbox = identifier_bbox
+        self._recognition_engine = recognition_engine
+        self._signals = signals
+
+    def run(self) -> None:  # noqa: N802
+        try:
+            img = load_qimage(self._path)
+            if img is None:
+                self._signals.error.emit(f"Cannot read image: {self._path.name}")
+                return
+            crop = crop_qimage(img, self._bbox)
+            result = self._recognition_engine.recognize_text(crop)
+            self._signals.ocr_result.emit(result.text, result.confidence)
+        except Exception as exc:  # noqa: BLE001
+            self._signals.error.emit(str(exc))
+
+
+# ---------------------------------------------------------------------------
 # Abstract calibration controller
 # ---------------------------------------------------------------------------
 
@@ -165,38 +181,22 @@ def rename_to_identifier(path: Path, identifier: str) -> Path | None:
 class AbstractCalibrationController(QObject):
     """Drives the calibration UI for one specific pipeline.
 
-    Each pipeline ships a concrete subclass that owns the calibration state
-    machine.  The :class:`CalibrationWidget` is a dumb surface; the
-    controller calls its API to update the UI and reacts to its signals.
+    Each pipeline ships a concrete subclass (as ``Pipeline.CalibrationController``)
+    that owns its calibration state machine.  :class:`CalibrationWidget` is a
+    dumb surface; the controller calls its API to update the UI.
 
     Signals
     -------
-    calibration_complete
-        ``(data: CalibrationData)`` — all steps passed.
+    calibration_complete(CalibrationData)
     calibration_cancelled
-        User cancelled or an unrecoverable error occurred.
     """
 
     calibration_complete = Signal(object)   # CalibrationData
     calibration_cancelled = Signal()
 
     @abstractmethod
-    def start(self, widget: "CalibrationWidgetProtocol", image_paths: "list[Path]") -> None:
-        """Attach to *widget* and begin the calibration flow.
-
-        Called once by :class:`CalibrationWidget` after UI setup.  The
-        controller connects to *widget*'s signals and calls its API methods
-        to drive the UI through the pipeline-specific steps.
-
-        Parameters
-        ----------
-        widget
-            The calibration widget surface.
-        image_paths
-            Ordered list of all images available for calibration.  Index 0
-            is shown first; the controller may advance the index when the
-            user skips.
-        """
+    def start(self, widget: object, image_paths: list[Path]) -> None:
+        """Attach to *widget* and begin the calibration flow."""
 
 
 # ---------------------------------------------------------------------------
@@ -207,58 +207,35 @@ class AbstractCalibrationController(QObject):
 class AbstractPipeline(QObject):
     """Abstract base class for identification pipelines.
 
-    Each pipeline is a QObject so it can emit Qt signals across threads.
-    Heavy computation steps are run on a background thread via QRunnable;
-    results are delivered back to the main thread via queued signals.
-    User-confirmation steps pause execution and wait for calls to the
-    corresponding ``confirm_*`` / ``select_*`` methods.
-
-    Signals
-    -------
-    Calibration signals (emitted when user input is needed):
-
-    chip_detected
-        ``(polygon_points: list[tuple[float, float]], confidence: float)``
-        — Pipeline 1: chip boundary found; user must confirm/reject.
-    chip_detection_failed
-        ``(reason: str)`` — automatic chip detection yielded no result.
-    text_regions_detected
-        ``(regions: list[QRectF])`` — text regions found inside the chip
-        area; user must select the identifier region.
-    roi_confirmed
-        ``(snapped: QRectF)`` — Pipeline 2: text detection snapped the
-        ROI; user must confirm the snapped region.
-    ocr_result_ready
-        ``(text: str, confidence: float)`` — OCR result for the first
-        image; user must confirm or correct.
-    calibration_complete
-        ``(data: CalibrationData)`` — all calibration steps passed.
-    calibration_error
-        ``(message: str)`` — unrecoverable calibration error.
-
-    Batch signals:
-
-    image_processed
-        ``(result: PipelineResult)`` — one image finished processing.
-    progress_updated
-        ``(current: int, total: int)`` — batch progress tick.
+    Signals common to every pipeline
+    ---------------------------------
+    ocr_result_ready(text, confidence)
+        OCR result for the reference image; user must confirm.
+    calibration_complete(CalibrationData)
+        All calibration steps passed.
+    calibration_error(message)
+        Unrecoverable calibration error.
+    image_processed(PipelineResult)
+        One batch image finished.
+    progress_updated(current, total)
+        Batch progress tick.
     batch_complete
-        Emitted when all images in the batch have been processed.
-    batch_error
-        ``(message: str)`` — unrecoverable batch error.
+        All batch images processed.
+    batch_error(message)
+        Unrecoverable batch error.
+
+    Pipeline-specific calibration signals (e.g. chip_detected, roi_confirmed)
+    are defined on the concrete subclass — not here.  Controllers hold a
+    typed reference to the concrete pipeline and access them directly.
     """
 
-    # --- Calibration signals ---
-    chip_detected = Signal(list, float)
-    chip_detection_failed = Signal(str)
-    text_regions_detected = Signal(list)
-    roi_confirmed = Signal(QRectF)
+    # --- Universal calibration signals ---
     ocr_result_ready = Signal(str, float)
-    calibration_complete = Signal(object)  # CalibrationData
+    calibration_complete = Signal(object)   # CalibrationData
     calibration_error = Signal(str)
 
     # --- Batch signals ---
-    image_processed = Signal(object)  # PipelineResult
+    image_processed = Signal(object)        # PipelineResult
     progress_updated = Signal(int, int)
     batch_complete = Signal()
     batch_error = Signal(str)
@@ -280,113 +257,49 @@ class AbstractPipeline(QObject):
 
     @abstractmethod
     def start_calibration(self, image: Path) -> None:
-        """Begin calibration on the reference *image*.
+        """Begin calibration on the reference *image*."""
 
-        Triggers the first automatic step immediately (chip detection for
-        Pipeline 1, or waits for user ROI for Pipeline 2).
-
-        Parameters
-        ----------
-        image : Path
-            Path to the first image in the batch.
-        """
-
-    def confirm_chip(self, accepted: bool, manual_polygon: list[tuple[float, float]] | None = None) -> None:
-        """Respond to a :attr:`chip_detected` or :attr:`chip_detection_failed` signal.
-
-        Parameters
-        ----------
-        accepted : bool
-            ``True`` to accept the detected polygon; ``False`` to retry or
-            use *manual_polygon*.
-        manual_polygon : list[tuple[float, float]] | None
-            User-drawn polygon corners in image pixel space.  Used when
-            ``accepted`` is ``False`` and the user chose to draw manually.
-        """
-
-    def set_roi(self, rect: QRectF) -> None:
-        """Supply the user-drawn ROI rectangle (Pipeline 2 calibration start).
-
-        Parameters
-        ----------
-        rect : QRectF
-            Rectangle in image pixel coordinates.
-        """
-
-    def confirm_roi(self, accepted: bool, manual_rect: QRectF | None = None) -> None:
-        """Respond to a :attr:`roi_confirmed` signal.
-
-        Parameters
-        ----------
-        accepted : bool
-            ``True`` to accept the snapped region.
-        manual_rect : QRectF | None
-            Used when ``accepted`` is ``False`` and the user chose to draw
-            the region manually.
-        """
-
-    def select_identifier_region(
-        self,
-        region_index: int | None = None,
-        manual_rect: QRectF | None = None,
-    ) -> None:
-        """Respond to a :attr:`text_regions_detected` signal.
-
-        Parameters
-        ----------
-        region_index : int | None
-            Index into the list supplied by the signal, or ``None`` for
-            manual drawing.
-        manual_rect : QRectF | None
-            User-drawn rectangle; used when ``region_index`` is ``None``.
-        """
-
+    @abstractmethod
     def confirm_ocr_result(self, text: str) -> None:
-        """Respond to a :attr:`ocr_result_ready` signal.
+        """User confirmed (and possibly corrected) the OCR result.
 
-        Parameters
-        ----------
-        text : str
-            Confirmed (possibly user-corrected) identifier text.
+        Builds the pipeline-specific CalibrationData and emits
+        ``calibration_complete``.
         """
+
+    def create_calibration_controller(self) -> AbstractCalibrationController:
+        """Return a new controller that drives the calibration UI.
+
+        The default implementation instantiates ``self.CalibrationController(self)``.
+        Every concrete pipeline **must** define a nested class::
+
+            class MyPipeline(AbstractPipeline):
+                class CalibrationController(AbstractCalibrationController):
+                    ...
+        """
+        return self.CalibrationController(self)  # type: ignore[attr-defined]
+
+    def reset(self) -> None:
+        """Clear the stopped flag so the pipeline can be restarted."""
+        self._stopped = False
+
+    def stop(self) -> None:
+        """Request a graceful abort of any ongoing processing."""
+        self._stopped = True
 
     # ------------------------------------------------------------------
     # Batch processing interface
     # ------------------------------------------------------------------
 
     @abstractmethod
-    def start_batch(self, images: list[Path], calib: CalibrationData, min_confidence: float, rename_preview: bool = False) -> None:
-        """Process *images* using the calibration reference *calib*.
+    def start_batch(
+        self,
+        images: list[Path],
+        calib: CalibrationData,
+        min_confidence: float,
+        rename_preview: bool = False,
+    ) -> None:
+        """Process *images* using calibration reference *calib*.
 
-        Emits :attr:`image_processed` for each image and
-        :attr:`batch_complete` when done.
-
-        Parameters
-        ----------
-        images : list[Path]
-            Images to process (the reference image must be excluded).
-        calib : CalibrationData
-            Reference data from the calibration phase.
-        min_confidence : float
-            Results with confidence below this value are classified as
-            :attr:`ResultStatus.FAILED`.
+        Emits ``image_processed`` per image and ``batch_complete`` when done.
         """
-
-    def create_calibration_controller(self) -> "AbstractCalibrationController":
-        """Return a new controller that drives the calibration UI for this pipeline.
-
-        The default implementation instantiates the nested ``CalibrationController``
-        class that every concrete pipeline **must** define::
-
-            class MyPipeline(AbstractPipeline):
-                class CalibrationController(AbstractCalibrationController):
-                    ...
-
-        Adding a new pipeline only requires defining that nested class alongside
-        the batch-processing logic — no changes to :class:`CalibrationWidget`.
-        """
-        return self.CalibrationController(self)  # type: ignore[attr-defined]
-
-    def stop(self) -> None:
-        """Request a graceful abort of any ongoing processing."""
-        self._stopped = True

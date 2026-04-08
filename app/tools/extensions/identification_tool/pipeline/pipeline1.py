@@ -3,19 +3,24 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRect, QRectF, QRunnable, QThreadPool, Signal
-from PySide6.QtGui import QImage, QImageReader
+from PySide6.QtCore import QObject, QRectF, QRunnable, QThreadPool, Signal
+from PySide6.QtGui import QColor
 
-from app.tools.extensions.identification_tool.ocr.base import AbstractOcrEngine, DetectedRegion
+from app.tools.extensions.identification_tool.ocr.base import AbstractOcrEngine
 from app.tools.extensions.identification_tool.pipeline.base import (
     AbstractCalibrationController,
     AbstractPipeline,
     BoundingBox,
     CalibrationData,
+    OcrWorker,
     PipelineResult,
     ResultStatus,
+    WorkerSignals,
+    crop_qimage,
+    load_qimage,
     rename_to_identifier,
 )
 
@@ -23,26 +28,36 @@ _logger = logging.getLogger("vi_toolbox.tools.scibit.pipeline1")
 
 
 # ---------------------------------------------------------------------------
-# Background worker signals
+# Pipeline 1 calibration data
 # ---------------------------------------------------------------------------
 
 
-class _WorkerSignals(QObject):
-    chip_result = Signal(list, float)   # (polygon, confidence)
-    chip_failed = Signal(str)
-    text_regions_result = Signal(list)  # list[QRectF]
-    ocr_result = Signal(str, float)     # (text, confidence)
-    batch_image_result = Signal(object) # PipelineResult
-    error = Signal(str)
+@dataclass
+class Pipeline1CalibrationData(CalibrationData):
+    """Calibration data for Pipeline 1.
+
+    Parameters
+    ----------
+    chip_bbox
+        Absolute pixel bounding box of the chip in the reference image.
+    identifier_bbox_norm
+        Identifier position/size as proportions of ``chip_bbox``.
+    chip_aspect_ratio
+        ``chip_bbox.width / chip_bbox.height``.
+    """
+
+    chip_bbox: BoundingBox | None = None
+    identifier_bbox_norm: BoundingBox | None = None
+    chip_aspect_ratio: float | None = None
 
 
 # ---------------------------------------------------------------------------
-# Background workers (QRunnable)
+# Background workers
 # ---------------------------------------------------------------------------
 
 
 class _ChipDetectionWorker(QRunnable):
-    def __init__(self, image_path: Path, signals: _WorkerSignals) -> None:
+    def __init__(self, image_path: Path, signals: WorkerSignals) -> None:
         super().__init__()
         self.setAutoDelete(True)
         self._path = image_path
@@ -58,23 +73,21 @@ class _ChipDetectionWorker(QRunnable):
             _, thresh = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             h, w = img.shape
-            valid = [
-                c for c in contours
-                if not _touches_border(c, w, h, margin=5)
-            ]
+            valid = [c for c in contours if not _touches_border(c, w, h, margin=5)]
             if not valid:
                 self._signals.chip_failed.emit("No chip contour found after border filtering.")
                 return
             largest = max(valid, key=cv2.contourArea)
-            rect = cv2.boundingRect(largest)
-            x, y, cw, ch = rect
-            polygon = [(float(x), float(y)), (float(x + cw), float(y)),
-                       (float(x + cw), float(y + ch)), (float(x), float(y + ch))]
+            x, y, cw, ch = cv2.boundingRect(largest)
+            polygon = [
+                (float(x), float(y)), (float(x + cw), float(y)),
+                (float(x + cw), float(y + ch)), (float(x), float(y + ch)),
+            ]
             self._signals.chip_result.emit(polygon, 0.9)
         except ImportError:
-            # cv2 not available — fall back to a centred stub result
-            _logger.warning("OpenCV not available; using stub chip detection.")
-            import cv2  # noqa: F811 — intentionally re-raising; but we catch ImportError
+            self._signals.chip_failed.emit(
+                "OpenCV (cv2) is required for chip detection but is not installed."
+            )
         except Exception as exc:  # noqa: BLE001
             self._signals.chip_failed.emit(str(exc))
 
@@ -93,7 +106,7 @@ class _TextDetectionWorker(QRunnable):
         image_path: Path,
         chip_bbox: BoundingBox,
         detection_engine: AbstractOcrEngine,
-        signals: _WorkerSignals,
+        signals: WorkerSignals,
     ) -> None:
         super().__init__()
         self.setAutoDelete(True)
@@ -104,47 +117,15 @@ class _TextDetectionWorker(QRunnable):
 
     def run(self) -> None:  # noqa: N802
         try:
-            img = _load_qimage(self._path)
+            img = load_qimage(self._path)
             if img is None:
                 self._signals.error.emit(f"Cannot read image: {self._path.name}")
                 return
             bb = self._chip_bbox
-            chip_crop = _crop_qimage(img, bb)
+            chip_crop = crop_qimage(img, bb)
             regions = self._detection_engine.detect_text_regions(chip_crop)
-            # Offset detected regions back to full-image coordinates
-            rects = [
-                QRectF(r.x + bb.x, r.y + bb.y, r.width, r.height)
-                for r in regions
-            ]
+            rects = [QRectF(r.x + bb.x, r.y + bb.y, r.width, r.height) for r in regions]
             self._signals.text_regions_result.emit(rects)
-        except Exception as exc:  # noqa: BLE001
-            self._signals.error.emit(str(exc))
-
-
-class _OcrWorker(QRunnable):
-    def __init__(
-        self,
-        image_path: Path,
-        identifier_bbox: BoundingBox,
-        recognition_engine: AbstractOcrEngine,
-        signals: _WorkerSignals,
-    ) -> None:
-        super().__init__()
-        self.setAutoDelete(True)
-        self._path = image_path
-        self._bbox = identifier_bbox
-        self._recognition_engine = recognition_engine
-        self._signals = signals
-
-    def run(self) -> None:  # noqa: N802
-        try:
-            img = _load_qimage(self._path)
-            if img is None:
-                self._signals.error.emit(f"Cannot read image: {self._path.name}")
-                return
-            crop = _crop_qimage(img, self._bbox)
-            result = self._recognition_engine.recognize_text(crop)
-            self._signals.ocr_result.emit(result.text, result.confidence)
         except Exception as exc:  # noqa: BLE001
             self._signals.error.emit(str(exc))
 
@@ -155,10 +136,10 @@ class _SequentialBatchWorker(QRunnable):
     def __init__(
         self,
         images: list[Path],
-        calib: CalibrationData,
+        calib: Pipeline1CalibrationData,
         min_confidence: float,
         recognition_engine: AbstractOcrEngine,
-        signals: _WorkerSignals,
+        signals: WorkerSignals,
         rename_preview: bool = False,
     ) -> None:
         super().__init__()
@@ -175,13 +156,11 @@ class _SequentialBatchWorker(QRunnable):
         id_norm = self._calib.identifier_bbox_norm
         for path in self._images:
             try:
-                img = _load_qimage(path)
+                img = load_qimage(path)
                 if img is None or chip_bbox is None or id_norm is None:
                     self._signals.batch_image_result.emit(PipelineResult(
-                        original_path=path,
-                        recognized_text=None,
-                        confidence=0.0,
-                        status=ResultStatus.FAILED,
+                        original_path=path, recognized_text=None,
+                        confidence=0.0, status=ResultStatus.FAILED,
                     ))
                     continue
 
@@ -191,7 +170,7 @@ class _SequentialBatchWorker(QRunnable):
                     width=id_norm.width * chip_bbox.width,
                     height=id_norm.height * chip_bbox.height,
                 )
-                crop = _crop_qimage(img, id_bbox)
+                crop = crop_qimage(img, id_bbox)
                 ocr_result = self._recognition_engine.recognize_text(crop)
                 accepted = (
                     ocr_result.confidence >= self._min_confidence
@@ -216,10 +195,8 @@ class _SequentialBatchWorker(QRunnable):
             except Exception as exc:  # noqa: BLE001
                 _logger.warning("Batch processing error for %s: %s", path.name, exc)
                 self._signals.batch_image_result.emit(PipelineResult(
-                    original_path=path,
-                    recognized_text=None,
-                    confidence=0.0,
-                    status=ResultStatus.FAILED,
+                    original_path=path, recognized_text=None,
+                    confidence=0.0, status=ResultStatus.FAILED,
                 ))
 
 
@@ -236,7 +213,12 @@ class Pipeline1(AbstractPipeline):
     applies these coordinates to each subsequent image.
     """
 
-    # Assigned after the controller class is defined below the pipeline class.
+    # Pipeline-1-specific calibration signals
+    chip_detected = Signal(list, float)   # (polygon, confidence)
+    chip_detection_failed = Signal(str)
+    text_regions_detected = Signal(list)  # list[QRectF]
+
+    # Assigned at module level below after the controller class is defined.
     CalibrationController: type
 
     def __init__(
@@ -249,13 +231,10 @@ class Pipeline1(AbstractPipeline):
         self._ref_image: Path | None = None
         self._chip_bbox: BoundingBox | None = None
         self._identifier_bbox: BoundingBox | None = None
-        self._pending_batch_results: list[PipelineResult] = []
         self._batch_total: int = 0
         self._batch_done: int = 0
-        self._min_confidence: float = 0.75
-        self._calib_data: CalibrationData | None = None
 
-        self._signals = _WorkerSignals()
+        self._signals = WorkerSignals()
         self._signals.chip_result.connect(self._on_chip_detected)
         self._signals.chip_failed.connect(self._on_chip_failed)
         self._signals.text_regions_result.connect(self._on_text_regions_detected)
@@ -273,18 +252,13 @@ class Pipeline1(AbstractPipeline):
         self._run_chip_detection(image)
 
     def _run_chip_detection(self, image: Path) -> None:
-        try:
-            import cv2  # noqa: F401
-        except ImportError:
-            self._signals.chip_failed.emit("OpenCV (cv2) is required for chip detection but is not installed.")
-            return
         worker = _ChipDetectionWorker(image, self._signals)
         QThreadPool.globalInstance().start(worker)
 
     def _on_chip_detected(self, polygon: list[tuple[float, float]], confidence: float) -> None:
         if self._stopped:
             return
-        self._store_chip_bbox(polygon)  # store immediately so confirm_chip(True) can use it
+        self._store_chip_bbox(polygon)
         self.chip_detected.emit(polygon, confidence)
 
     def _on_chip_failed(self, reason: str) -> None:
@@ -300,16 +274,13 @@ class Pipeline1(AbstractPipeline):
         if self._stopped:
             return
         if not accepted and manual_polygon is not None:
-            # User drew manually
             xs = [p[0] for p in manual_polygon]
             ys = [p[1] for p in manual_polygon]
             self._chip_bbox = BoundingBox(
                 x=min(xs), y=min(ys),
-                width=max(xs) - min(xs),
-                height=max(ys) - min(ys),
+                width=max(xs) - min(xs), height=max(ys) - min(ys),
             )
         elif not accepted:
-            # Retry
             if self._ref_image:
                 self._run_chip_detection(self._ref_image)
             return
@@ -317,8 +288,6 @@ class Pipeline1(AbstractPipeline):
 
         if self._chip_bbox is None:
             return
-
-        # Run text detection inside chip
         worker = _TextDetectionWorker(
             self._ref_image, self._chip_bbox, self._detection_engine, self._signals
         )
@@ -329,23 +298,7 @@ class Pipeline1(AbstractPipeline):
             return
         self.text_regions_detected.emit(rects)
 
-    def select_identifier_region(
-        self,
-        region_index: int | None = None,
-        manual_rect: QRectF | None = None,
-    ) -> None:
-        if self._stopped:
-            return
-        if region_index is not None:
-            # Will be set from the list delivered by text_regions_detected
-            # The CalibrationWidget passes the QRectF directly
-            return
-        if manual_rect is not None:
-            self._identifier_bbox = BoundingBox.from_qrectf(manual_rect)
-            self._run_calibration_ocr()
-
     def set_identifier_bbox(self, rect: QRectF) -> None:
-        """Called by the calibration widget with the selected identifier region."""
         if self._chip_bbox is None:
             return
         self._identifier_bbox = BoundingBox.from_qrectf(rect)
@@ -354,7 +307,7 @@ class Pipeline1(AbstractPipeline):
     def _run_calibration_ocr(self) -> None:
         if self._ref_image is None or self._identifier_bbox is None:
             return
-        worker = _OcrWorker(
+        worker = OcrWorker(
             self._ref_image, self._identifier_bbox, self._recognition_engine, self._signals
         )
         QThreadPool.globalInstance().start(worker)
@@ -367,30 +320,26 @@ class Pipeline1(AbstractPipeline):
     def confirm_ocr_result(self, text: str) -> None:
         if self._stopped or self._chip_bbox is None or self._identifier_bbox is None:
             return
-        # Compute normalised identifier position
         id_norm = BoundingBox(
             x=(self._identifier_bbox.x - self._chip_bbox.x) / self._chip_bbox.width,
             y=(self._identifier_bbox.y - self._chip_bbox.y) / self._chip_bbox.height,
             width=self._identifier_bbox.width / self._chip_bbox.width,
             height=self._identifier_bbox.height / self._chip_bbox.height,
         )
-        calib = CalibrationData(
+        calib = Pipeline1CalibrationData(
             chip_bbox=self._chip_bbox,
             identifier_bbox_norm=id_norm,
             chip_aspect_ratio=self._chip_bbox.width / max(self._chip_bbox.height, 1),
             reference_identifier=text,
         )
-        self._calib_data = calib
         self.calibration_complete.emit(calib)
 
-    # Store chip bbox when detected (before user confirmation)
     def _store_chip_bbox(self, polygon: list[tuple[float, float]]) -> None:
         xs = [p[0] for p in polygon]
         ys = [p[1] for p in polygon]
         self._chip_bbox = BoundingBox(
             x=min(xs), y=min(ys),
-            width=max(xs) - min(xs),
-            height=max(ys) - min(ys),
+            width=max(xs) - min(xs), height=max(ys) - min(ys),
         )
 
     # ------------------------------------------------------------------
@@ -398,15 +347,16 @@ class Pipeline1(AbstractPipeline):
     # ------------------------------------------------------------------
 
     def start_batch(
-        self, images: list[Path], calib: CalibrationData, min_confidence: float,
+        self,
+        images: list[Path],
+        calib: CalibrationData,
+        min_confidence: float,
         rename_preview: bool = False,
     ) -> None:
+        assert isinstance(calib, Pipeline1CalibrationData)
         self._stopped = False
-        self._min_confidence = min_confidence
-        self._calib_data = calib
         self._batch_total = len(images)
         self._batch_done = 0
-        self._pending_batch_results.clear()
 
         if not images:
             self.batch_complete.emit()
@@ -426,28 +376,6 @@ class Pipeline1(AbstractPipeline):
         self.progress_updated.emit(self._batch_done, self._batch_total)
         if self._batch_done >= self._batch_total:
             self.batch_complete.emit()
-
-
-# ---------------------------------------------------------------------------
-# QImage helpers
-# ---------------------------------------------------------------------------
-
-
-def _load_qimage(path: Path) -> QImage | None:
-    """Load *path* as a greyscale :class:`QImage`, or ``None`` on failure."""
-    img = QImage(str(path))
-    if img.isNull():
-        return None
-    return img.convertToFormat(QImage.Format.Format_Grayscale8)
-
-
-def _crop_qimage(img: QImage, bbox: BoundingBox) -> QImage:
-    """Return a copy of *img* cropped to *bbox*, clamped to image bounds."""
-    x = max(0, int(bbox.x))
-    y = max(0, int(bbox.y))
-    w = min(img.width() - x, max(1, int(bbox.width)))
-    h = min(img.height() - y, max(1, int(bbox.height)))
-    return img.copy(QRect(x, y, w, h))
 
 
 # ---------------------------------------------------------------------------
@@ -491,10 +419,6 @@ class _Pipeline1CalibrationController(AbstractCalibrationController):
 
         self._step1()
 
-    # ------------------------------------------------------------------
-    # Steps / helpers
-    # ------------------------------------------------------------------
-
     def _image_path(self) -> Path:
         return self._image_paths[self._image_index]
 
@@ -524,23 +448,16 @@ class _Pipeline1CalibrationController(AbstractCalibrationController):
             return
         self._image_index += 1
         self._widget.clear_overlays()
-        self._pipeline._stopped = False
+        self._pipeline.reset()
         self._step1()
 
-    # ------------------------------------------------------------------
-    # Pipeline signal handlers
-    # ------------------------------------------------------------------
-
     def _on_chip_detected(self, polygon: list[tuple[float, float]], _confidence: float) -> None:
-        from PySide6.QtGui import QColor
         self._widget.set_step(2, 5, "Confirm chip boundary")
         self._widget.clear_overlays()
         self._widget.show_rect_overlay(_polygon_to_qrectf(polygon), QColor(0, 200, 0), width=8)
         self._widget.set_buttons([
-            ("confirm", "Confirm"),
-            ("reject_retry", "Retry"),
-            ("reject_manual", "Draw Manually"),
-            ("cancel", "Cancel"),
+            ("confirm", "Confirm"), ("reject_retry", "Retry"),
+            ("reject_manual", "Draw Manually"), ("cancel", "Cancel"),
         ])
         self._widget.button("confirm").clicked.connect(self._on_confirm_chip)
         self._widget.button("reject_retry").clicked.connect(self._on_retry_chip)
@@ -579,7 +496,6 @@ class _Pipeline1CalibrationController(AbstractCalibrationController):
         self._connect_cancel()
 
     def _on_text_regions_detected(self, rects: list[QRectF]) -> None:
-        from PySide6.QtGui import QColor
         self._widget.set_step(4, 5, "Select the identifier region")
         self._widget.clear_overlays()
         items = self._widget.show_rects_overlay(rects, QColor(255, 0, 255), width=8)
@@ -609,7 +525,6 @@ class _Pipeline1CalibrationController(AbstractCalibrationController):
         self._connect_cancel()
 
     def _on_roi_drawn(self, mode: str, rect: QRectF) -> None:
-        from PySide6.QtGui import QColor
         self._widget.clear_overlays()
         if mode == "chip":
             polygon = [
