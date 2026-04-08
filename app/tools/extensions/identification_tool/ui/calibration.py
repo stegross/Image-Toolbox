@@ -1,12 +1,12 @@
-"""Calibration phase widget — drives the first-image reference setup."""
+"""Calibration phase widget — a dumb UI surface driven by a CalibrationController."""
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, QRect, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QKeySequence, QPen
+from PySide6.QtCore import QPoint, QRect, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QKeySequence, QPen, QPixmap
 from PySide6.QtWidgets import (
     QGraphicsRectItem,
     QGraphicsView,
@@ -17,53 +17,44 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRubberBand,
     QSizePolicy,
-    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from app.tools._shared.image_widgets import ImageArea, PanZoomView
 from app.tools.extensions.identification_tool.pipeline.base import (
-    AbstractPipeline,
+    AbstractCalibrationController,
     CalibrationData,
 )
 
 _logger = logging.getLogger("vi_toolbox.tools.scibit.calibration")
 
+
 # ---------------------------------------------------------------------------
-# ROI-selectable image area
+# ROI-selectable view
 # ---------------------------------------------------------------------------
 
 
 class _RoiSelectView(PanZoomView):
-    """Pan/zoom view extended with rubber-band ROI selection.
+    """PanZoomView extended with rubber-band ROI selection."""
 
-    When :meth:`start_roi_selection` is active, clicking and dragging
-    draws a rubber band.  On mouse release the selected rectangle is
-    reported via :attr:`roi_drawn`.
-
-    Signals
-    -------
-    roi_drawn
-        ``(rect: QRectF)`` — rectangle in scene coordinates.
-    """
-
-    roi_drawn = Signal(QRectF)
+    # Emits (mode, scene_rect) when user finishes drawing
+    roi_drawn = Signal(str, QRectF)
 
     def __init__(self, scene, parent=None) -> None:
         super().__init__(scene, parent)
         self._selecting = False
+        self._roi_mode: str = ""
         self._origin: QPoint | None = None
         self._rubber_band = QRubberBand(QRubberBand.Shape.Rectangle, self)
 
-    def start_roi_selection(self) -> None:
-        """Switch to rubber-band draw mode (disables pan/drag)."""
+    def start_roi_selection(self, mode: str) -> None:
+        self._roi_mode = mode
         self._selecting = True
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.setCursor(Qt.CursorShape.CrossCursor)
 
     def stop_roi_selection(self) -> None:
-        """Restore normal pan/drag mode."""
         self._selecting = False
         self._rubber_band.hide()
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
@@ -92,29 +83,33 @@ class _RoiSelectView(PanZoomView):
             scene_rect = self.mapToScene(viewport_rect).boundingRect()
             self._origin = None
             if scene_rect.width() > 2 and scene_rect.height() > 2:
-                self.roi_drawn.emit(scene_rect)
+                self.roi_drawn.emit(self._roi_mode, scene_rect)
         else:
             super().mouseReleaseEvent(event)
 
 
-class _OverlayImageArea(ImageArea):
-    """ImageArea subclass that uses :class:`_RoiSelectView` and exposes overlay helpers."""
+# ---------------------------------------------------------------------------
+# Overlay image area
+# ---------------------------------------------------------------------------
 
-    roi_drawn = Signal(QRectF)
+
+class _OverlayImageArea(ImageArea):
+    """ImageArea that uses _RoiSelectView and exposes overlay/ROI helpers."""
+
+    roi_drawn = Signal(str, QRectF)
 
     def _create_view(self) -> PanZoomView:
         view = _RoiSelectView(self._scene, self)
         view.roi_drawn.connect(self.roi_drawn)
         return view
 
-    def start_roi_selection(self) -> None:
-        self._view.start_roi_selection()  # type: ignore[attr-defined]
+    def start_roi_selection(self, mode: str) -> None:
+        self._view.start_roi_selection(mode)  # type: ignore[attr-defined]
 
     def stop_roi_selection(self) -> None:
         self._view.stop_roi_selection()  # type: ignore[attr-defined]
 
     def show_rect_overlay(self, rect: QRectF, color: QColor | None = None, width: int = 8) -> QGraphicsRectItem:
-        """Draw a rectangle overlay on the scene and return the item."""
         pen = QPen(color or QColor(255, 0, 255))
         pen.setWidth(width)
         item = QGraphicsRectItem(rect)
@@ -123,7 +118,6 @@ class _OverlayImageArea(ImageArea):
         return item
 
     def show_rects_overlay(self, rects: list[QRectF], color: QColor | None = None, width: int = 8) -> list[QGraphicsRectItem]:
-        """Draw multiple rectangle overlays."""
         return [self.show_rect_overlay(r, color, width) for r in rects]
 
 
@@ -160,19 +154,10 @@ class _ButtonBar(QWidget):
         self._buttons: dict[str, QPushButton] = {}
 
     def set_buttons(self, specs: list[tuple[str, str]]) -> None:
-        """Replace button bar contents.
-
-        Parameters
-        ----------
-        specs : list[tuple[str, str]]
-            List of ``(object_name, label)`` pairs.
-        """
-        # Remove existing buttons
         for btn in self._buttons.values():
             self._layout.removeWidget(btn)
             btn.deleteLater()
         self._buttons.clear()
-        # Add new ones
         for name, label in specs:
             btn = QPushButton(label)
             self._buttons[name] = btn
@@ -198,14 +183,16 @@ class _OcrConfirmPanel(QWidget):
         layout.addWidget(QLabel("Recognised identifier:"))
         self._edit = QLineEdit()
         layout.addWidget(self._edit, stretch=1)
-        self._confirm_btn = QPushButton("Confirm")
-        self._confirm_btn.clicked.connect(self._on_confirm)
-        layout.addWidget(self._confirm_btn)
+        btn = QPushButton("Confirm")
+        btn.clicked.connect(self._on_confirm)
+        layout.addWidget(btn)
         self.hide()
 
     def show_result(self, text: str) -> None:
         self._edit.setText(text)
         self.show()
+        self._edit.setFocus()
+        self._edit.selectAll()
 
     def _on_confirm(self) -> None:
         text = self._edit.text().strip()
@@ -214,41 +201,67 @@ class _OcrConfirmPanel(QWidget):
 
 
 # ---------------------------------------------------------------------------
-# CalibrationWidget — drives the pipeline state machine
+# CalibrationWidget — dumb UI surface
 # ---------------------------------------------------------------------------
 
 
 class CalibrationWidget(QWidget):
-    """Guides the user through the calibration phase of the selected pipeline.
+    """Dumb UI surface for the calibration phase.
 
-    Signals
-    -------
-    calibration_complete
-        ``(data: CalibrationData)`` — emitted when all calibration steps pass.
-    calibration_cancelled
-        Emitted when the user cancels.
+    All logic lives in the controller returned by
+    ``pipeline.create_calibration_controller()``.  This widget exposes a
+    simple API that controllers call, and a set of signals that controllers
+    listen to.
+
+    Controller-facing API
+    ---------------------
+    load_image(path)
+    set_step(current, total, description)
+    set_buttons(specs)           — [(name, label), ...]
+    button(name) -> QPushButton
+    start_roi_selection(mode)
+    stop_roi_selection()
+    show_rect_overlay(rect, color, width) -> item
+    show_rects_overlay(rects, color, width) -> [items]
+    clear_overlays()
+    show_ocr_panel(text)
+    hide_ocr_panel()
+    show_error(message)
+    selected_scene_items() -> list
+
+    Signals for controllers
+    -----------------------
+    roi_drawn(mode: str, rect: QRectF)
+    ocr_confirmed(text: str)
+    scene_selection_changed()
+
+    Outer signals
+    -------------
+    calibration_complete(CalibrationData)
+    calibration_cancelled()
     """
 
-    calibration_complete = Signal(object)  # CalibrationData
+    calibration_complete = Signal(object)   # CalibrationData
     calibration_cancelled = Signal()
+
+    # Forwarded from internal widgets
+    roi_drawn = Signal(str, QRectF)
+    ocr_confirmed = Signal(str)
+    scene_selection_changed = Signal()
 
     def __init__(
         self,
-        pipeline: AbstractPipeline,
+        pipeline,
         image_paths: list[Path],
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self._pipeline = pipeline
-        self._image_paths = image_paths
-        self._image_index = 0
-        self._image_path = image_paths[0]
-        self._detected_rects: list[QRectF] = []
-        self._overlay_items: list[QGraphicsRectItem] = []
-
         self._setup_ui()
-        self._connect_pipeline_signals()
-        self._start()
+
+        controller: AbstractCalibrationController = pipeline.create_calibration_controller()
+        controller.calibration_complete.connect(self.calibration_complete)
+        controller.calibration_cancelled.connect(self.calibration_cancelled)
+        controller.start(self, image_paths)
 
     # ------------------------------------------------------------------
     # UI setup
@@ -264,253 +277,59 @@ class CalibrationWidget(QWidget):
 
         self._image_area = _OverlayImageArea(self)
         self._image_area.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._image_area.roi_drawn.connect(self._on_roi_drawn)
+        self._image_area.roi_drawn.connect(self.roi_drawn)
+        self._image_area.scene().selectionChanged.connect(self.scene_selection_changed)
         layout.addWidget(self._image_area, stretch=1)
 
         self._ocr_panel = _OcrConfirmPanel(self)
-        self._ocr_panel.confirmed.connect(self._on_ocr_confirmed)
+        self._ocr_panel.confirmed.connect(self.ocr_confirmed)
         layout.addWidget(self._ocr_panel)
 
         self._button_bar = _ButtonBar(self)
         layout.addWidget(self._button_bar)
 
-        self._load_current_image()
-
-    def _connect_pipeline_signals(self) -> None:
-        self._pipeline.chip_detected.connect(self._on_chip_detected)
-        self._pipeline.chip_detection_failed.connect(self._on_chip_detection_failed)
-        self._pipeline.text_regions_detected.connect(self._on_text_regions_detected)
-        self._pipeline.roi_confirmed.connect(self._on_roi_confirmed)
-        self._pipeline.ocr_result_ready.connect(self._on_ocr_result_ready)
-        self._pipeline.calibration_complete.connect(self._on_calibration_complete)
-        self._pipeline.calibration_error.connect(self._on_calibration_error)
-
     # ------------------------------------------------------------------
-    # Pipeline state driver
+    # Controller-facing API
     # ------------------------------------------------------------------
 
-    def _load_current_image(self) -> None:
-        from PySide6.QtGui import QPixmap
-        self._image_path = self._image_paths[self._image_index]
-        pixmap = QPixmap(str(self._image_path))
+    def load_image(self, path: Path) -> None:
+        pixmap = QPixmap(str(path))
         if not pixmap.isNull():
             self._image_area.set_pixmap(pixmap)
-            self._image_area.set_filename_text(
-                f"{self._image_path.name}  ({self._image_index + 1}/{len(self._image_paths)})"
-            )
+            self._image_area.set_filename_text(path.name)
 
-    def _start(self) -> None:
-        from app.tools.extensions.identification_tool.pipeline.pipeline2 import Pipeline2
+    def set_step(self, current: int, total: int, description: str) -> None:
+        self._step_indicator.set_step(current, total, description)
 
-        if isinstance(self._pipeline, Pipeline2):
-            self._step_indicator.set_step(1, 4, "Draw ROI around the identifier")
-            self._image_area.start_roi_selection()
-            self._pipeline.start_calibration(self._image_path)
-            self._set_buttons([("cancel", "Cancel")])
-        else:
-            self._step_indicator.set_step(1, 5, "Detecting chip boundary…")
-            self._set_buttons([("cancel", "Cancel")])
-            self._pipeline.start_calibration(self._image_path)
+    def set_buttons(self, specs: list[tuple[str, str]]) -> None:
+        self._button_bar.set_buttons(specs)
 
-        self._button_bar.button("cancel").clicked.connect(self.calibration_cancelled)
+    def button(self, name: str) -> QPushButton | None:
+        return self._button_bar.button(name)
 
-    def _on_skip_image(self) -> None:
-        """Skip current calibration image and try the next one."""
-        if self._image_index >= len(self._image_paths) - 1:
-            return
-        self._image_index += 1
-        self._image_area.clear_overlays()
-        self._load_current_image()
-        self._pipeline._stopped = False
-        self._start()
+    def start_roi_selection(self, mode: str) -> None:
+        self._image_area.start_roi_selection(mode)
 
-    # --- Pipeline 1 callbacks ---
-
-    def _on_chip_detected(self, polygon: list[tuple[float, float]], confidence: float) -> None:
-        self._step_indicator.set_step(2, 5, "Confirm chip boundary")
-        self._image_area.clear_overlays()
-        rect = self._polygon_to_qrectf(polygon)
-        self._image_area.show_rect_overlay(rect, QColor(0, 200, 0))
-        # Store polygon for confirm_chip
-        self._last_polygon = polygon
-        self._set_buttons([
-            ("confirm", "Confirm"),
-            ("reject_retry", "Retry"),
-            ("reject_manual", "Draw Manually"),
-            ("cancel", "Cancel"),
-        ])
-        self._button_bar.button("confirm").clicked.connect(self._on_confirm_chip)
-        self._button_bar.button("reject_retry").clicked.connect(self._on_retry_chip)
-        self._button_bar.button("reject_manual").clicked.connect(self._on_manual_chip)
-        self._button_bar.button("cancel").clicked.connect(self.calibration_cancelled)
-        # Store chip bbox in pipeline
-        from app.tools.extensions.identification_tool.pipeline.pipeline1 import Pipeline1
-        if isinstance(self._pipeline, Pipeline1):
-            self._pipeline._store_chip_bbox(polygon)
-
-    def _on_chip_detection_failed(self, reason: str) -> None:
-        self._step_indicator.set_step(1, 5, f"Detection failed: {reason}")
-        self._set_buttons([
-            ("retry", "Retry"),
-            ("manual", "Draw Manually"),
-            ("cancel", "Cancel"),
-        ])
-        self._button_bar.button("retry").clicked.connect(
-            lambda: self._pipeline.confirm_chip(False)
-        )
-        self._button_bar.button("manual").clicked.connect(self._on_manual_chip)
-        self._button_bar.button("cancel").clicked.connect(self.calibration_cancelled)
-
-    def _on_confirm_chip(self) -> None:
-        self._step_indicator.set_step(3, 5, "Detecting text regions…")
-        self._set_buttons([("cancel", "Cancel")])
-        self._button_bar.button("cancel").clicked.connect(self.calibration_cancelled)
-        self._pipeline.confirm_chip(True)
-
-    def _on_retry_chip(self) -> None:
-        self._step_indicator.set_step(1, 5, "Detecting chip boundary…")
-        self._image_area.clear_overlays()
-        self._set_buttons([("cancel", "Cancel")])
-        self._button_bar.button("cancel").clicked.connect(self.calibration_cancelled)
-        self._pipeline.confirm_chip(False)
-
-    def _on_manual_chip(self) -> None:
-        self._step_indicator.set_step(2, 5, "Draw chip boundary manually")
-        self._image_area.clear_overlays()
-        self._image_area.start_roi_selection()
-        # On roi_drawn -> treat it as the chip boundary
-        self._roi_mode = "chip"
-        self._set_buttons([("cancel", "Cancel")])
-        self._button_bar.button("cancel").clicked.connect(self.calibration_cancelled)
-
-    def _on_text_regions_detected(self, rects: list[QRectF]) -> None:
-        self._detected_rects = rects
-        self._step_indicator.set_step(4, 5, "Select the identifier region")
-        self._image_area.clear_overlays()
-        self._overlay_items = self._image_area.show_rects_overlay(rects, QColor(255, 0, 255))
-        info = QLabel("Click a highlighted region, or draw manually.", self)
-        self._set_buttons([("manual_id", "Draw Manually"), ("cancel", "Cancel")], skip=False)
-        self._button_bar.button("manual_id").clicked.connect(self._on_manual_identifier)
-        self._button_bar.button("cancel").clicked.connect(self.calibration_cancelled)
-        self._roi_mode = "identifier_click"
-        # Allow clicking on an overlay to select it
-        for i, item in enumerate(self._overlay_items):
-            item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
-        self._image_area.scene().selectionChanged.connect(self._on_scene_selection_changed)
-
-    def _on_scene_selection_changed(self) -> None:
-        selected = self._image_area.scene().selectedItems()
-        if not selected:
-            return
-        item = selected[0]
-        rect = item.rect() if hasattr(item, "rect") else item.boundingRect()
-        self._image_area.scene().selectionChanged.disconnect(self._on_scene_selection_changed)
-        self._step_indicator.set_step(5, 5, "Running OCR…")
-        self._set_buttons([("cancel", "Cancel")], skip=False)
-        self._button_bar.button("cancel").clicked.connect(self.calibration_cancelled)
-        from app.tools.extensions.identification_tool.pipeline.pipeline1 import Pipeline1
-        if isinstance(self._pipeline, Pipeline1):
-            self._pipeline.set_identifier_bbox(rect)
-
-    def _on_manual_identifier(self) -> None:
-        self._image_area.start_roi_selection()
-        self._roi_mode = "identifier"
-        self._step_indicator.set_step(4, 5, "Draw the identifier region")
-        self._set_buttons([("cancel", "Cancel")], skip=False)
-        self._button_bar.button("cancel").clicked.connect(self.calibration_cancelled)
-
-    # --- Pipeline 2 callbacks ---
-
-    def _on_roi_drawn(self, rect: QRectF) -> None:
-        mode = getattr(self, "_roi_mode", "roi")
+    def stop_roi_selection(self) -> None:
         self._image_area.stop_roi_selection()
+
+    def show_rect_overlay(self, rect: QRectF, color: QColor | None = None, width: int = 8) -> QGraphicsRectItem:
+        return self._image_area.show_rect_overlay(rect, color, width)
+
+    def show_rects_overlay(self, rects: list[QRectF], color: QColor | None = None, width: int = 8) -> list[QGraphicsRectItem]:
+        return self._image_area.show_rects_overlay(rects, color, width)
+
+    def clear_overlays(self) -> None:
         self._image_area.clear_overlays()
-        self._image_area.show_rect_overlay(rect, QColor(0, 120, 255))
 
-        if mode == "chip":
-            polygon = [
-                (rect.x(), rect.y()), (rect.right(), rect.y()),
-                (rect.right(), rect.bottom()), (rect.x(), rect.bottom()),
-            ]
-            self._pipeline.confirm_chip(False, polygon)
-        elif mode == "identifier":
-            from app.tools.extensions.identification_tool.pipeline.pipeline1 import Pipeline1
-            if isinstance(self._pipeline, Pipeline1):
-                self._pipeline.set_identifier_bbox(rect)
-                self._step_indicator.set_step(5, 5, "Running OCR…")
-                self._set_buttons([("cancel", "Cancel")], skip=False)
-                self._button_bar.button("cancel").clicked.connect(self.calibration_cancelled)
-        else:
-            # Pipeline 2 ROI
-            self._step_indicator.set_step(2, 4, "Snapping to text boundary…")
-            self._set_buttons([("cancel", "Cancel")])
-            self._button_bar.button("cancel").clicked.connect(self.calibration_cancelled)
-            self._pipeline.set_roi(rect)
-
-    def _on_roi_confirmed(self, snapped: QRectF) -> None:
-        self._step_indicator.set_step(3, 4, "Confirm identifier region")
-        self._image_area.clear_overlays()
-        self._image_area.show_rect_overlay(snapped, QColor(0, 200, 0))
-        self._last_snapped = snapped
-        self._set_buttons([
-            ("confirm", "Confirm"),
-            ("redraw", "Redraw"),
-            ("cancel", "Cancel"),
-        ])
-        self._button_bar.button("confirm").clicked.connect(
-            lambda: self._pipeline.confirm_roi(True)
-        )
-        self._button_bar.button("redraw").clicked.connect(self._on_redraw_roi)
-        self._button_bar.button("cancel").clicked.connect(self.calibration_cancelled)
-
-    def _on_redraw_roi(self) -> None:
-        self._image_area.clear_overlays()
-        self._image_area.start_roi_selection()
-        self._roi_mode = "roi"
-        self._step_indicator.set_step(1, 4, "Draw ROI around the identifier")
-        self._set_buttons([("cancel", "Cancel")])
-        self._button_bar.button("cancel").clicked.connect(self.calibration_cancelled)
-
-    # --- Shared OCR confirmation ---
-
-    def _on_ocr_result_ready(self, text: str, confidence: float) -> None:
-        self._step_indicator.set_step(
-            5 if not hasattr(self, "_roi_mode") else 4,
-            5 if not hasattr(self, "_roi_mode") else 4,
-            f"Confirm OCR result (confidence: {confidence:.0%})",
-        )
+    def show_ocr_panel(self, text: str) -> None:
         self._ocr_panel.show_result(text)
-        self._set_buttons([], skip=False)  # confirm comes from the OCR panel button
 
-    def _on_ocr_confirmed(self, text: str) -> None:
+    def hide_ocr_panel(self) -> None:
         self._ocr_panel.hide()
-        self._pipeline.confirm_ocr_result(text)
 
-    def _on_calibration_complete(self, data: CalibrationData) -> None:
-        self.calibration_complete.emit(data)
-
-    def _on_calibration_error(self, message: str) -> None:
+    def show_error(self, message: str) -> None:
         QMessageBox.critical(self, "Calibration Error", message)
-        self.calibration_cancelled.emit()
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    def _skip_spec(self) -> list[tuple[str, str]]:
-        """Return a Skip Image button spec when more images are available."""
-        return [("skip_calib", "Skip Image")] if self._image_index < len(self._image_paths) - 1 else []
-
-    def _set_buttons(self, specs: list[tuple[str, str]], skip: bool = True) -> None:
-        prefix = self._skip_spec() if skip else []
-        self._button_bar.set_buttons(prefix + specs)
-        skip_btn = self._button_bar.button("skip_calib")
-        if skip_btn:
-            skip_btn.clicked.connect(self._on_skip_image)
-
-    @staticmethod
-    def _polygon_to_qrectf(polygon: list[tuple[float, float]]) -> QRectF:
-        xs = [p[0] for p in polygon]
-        ys = [p[1] for p in polygon]
-        x, y = min(xs), min(ys)
-        return QRectF(x, y, max(xs) - x, max(ys) - y)
+    def selected_scene_items(self) -> list:
+        return self._image_area.scene().selectedItems()

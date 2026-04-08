@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import enum
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -155,6 +155,48 @@ def rename_to_identifier(path: Path, identifier: str) -> Path | None:
     except OSError as exc:
         _log.error("Rename failed: %s -> %s: %s", path.name, candidate.name, exc)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Abstract calibration controller
+# ---------------------------------------------------------------------------
+
+
+class AbstractCalibrationController(QObject):
+    """Drives the calibration UI for one specific pipeline.
+
+    Each pipeline ships a concrete subclass that owns the calibration state
+    machine.  The :class:`CalibrationWidget` is a dumb surface; the
+    controller calls its API to update the UI and reacts to its signals.
+
+    Signals
+    -------
+    calibration_complete
+        ``(data: CalibrationData)`` — all steps passed.
+    calibration_cancelled
+        User cancelled or an unrecoverable error occurred.
+    """
+
+    calibration_complete = Signal(object)   # CalibrationData
+    calibration_cancelled = Signal()
+
+    @abstractmethod
+    def start(self, widget: "CalibrationWidgetProtocol", image_paths: "list[Path]") -> None:
+        """Attach to *widget* and begin the calibration flow.
+
+        Called once by :class:`CalibrationWidget` after UI setup.  The
+        controller connects to *widget*'s signals and calls its API methods
+        to drive the UI through the pipeline-specific steps.
+
+        Parameters
+        ----------
+        widget
+            The calibration widget surface.
+        image_paths
+            Ordered list of all images available for calibration.  Index 0
+            is shown first; the controller may advance the index when the
+            user skips.
+        """
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +355,7 @@ class AbstractPipeline(QObject):
     # ------------------------------------------------------------------
 
     @abstractmethod
-    def start_batch(self, images: list[Path], calib: CalibrationData, min_confidence: float) -> None:
+    def start_batch(self, images: list[Path], calib: CalibrationData, min_confidence: float, rename_preview: bool = False) -> None:
         """Process *images* using the calibration reference *calib*.
 
         Emits :attr:`image_processed` for each image and
@@ -329,6 +371,21 @@ class AbstractPipeline(QObject):
             Results with confidence below this value are classified as
             :attr:`ResultStatus.FAILED`.
         """
+
+    def create_calibration_controller(self) -> "AbstractCalibrationController":
+        """Return a new controller that drives the calibration UI for this pipeline.
+
+        The default implementation instantiates the nested ``CalibrationController``
+        class that every concrete pipeline **must** define::
+
+            class MyPipeline(AbstractPipeline):
+                class CalibrationController(AbstractCalibrationController):
+                    ...
+
+        Adding a new pipeline only requires defining that nested class alongside
+        the batch-processing logic — no changes to :class:`CalibrationWidget`.
+        """
+        return self.CalibrationController(self)  # type: ignore[attr-defined]
 
     def stop(self) -> None:
         """Request a graceful abort of any ongoing processing."""

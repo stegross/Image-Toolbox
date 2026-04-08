@@ -234,6 +234,12 @@ class Pipeline2(AbstractPipeline):
     # Calibration
     # ------------------------------------------------------------------
 
+    def create_calibration_controller(self):
+        from app.tools.extensions.identification_tool.ui.calibration_controller import (
+            Pipeline2CalibrationController,
+        )
+        return Pipeline2CalibrationController(self)
+
     def start_calibration(self, image: Path) -> None:
         self._ref_image = image
         self._stopped = False
