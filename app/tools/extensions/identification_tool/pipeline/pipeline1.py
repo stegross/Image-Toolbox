@@ -148,10 +148,12 @@ class _OcrWorker(QRunnable):
             self._signals.error.emit(str(exc))
 
 
-class _BatchImageWorker(QRunnable):
+class _SequentialBatchWorker(QRunnable):
+    """Processes all batch images sequentially on a single background thread."""
+
     def __init__(
         self,
-        image_path: Path,
+        images: list[Path],
         calib: CalibrationData,
         min_confidence: float,
         recognition_engine: AbstractOcrEngine,
@@ -160,7 +162,7 @@ class _BatchImageWorker(QRunnable):
     ) -> None:
         super().__init__()
         self.setAutoDelete(True)
-        self._path = image_path
+        self._images = images
         self._calib = calib
         self._min_confidence = min_confidence
         self._recognition_engine = recognition_engine
@@ -168,57 +170,56 @@ class _BatchImageWorker(QRunnable):
         self._rename_preview = rename_preview
 
     def run(self) -> None:  # noqa: N802
-        try:
-            img = _load_qimage(self._path)
-            chip_bbox = self._calib.chip_bbox
-            id_norm = self._calib.identifier_bbox_norm
+        chip_bbox = self._calib.chip_bbox
+        id_norm = self._calib.identifier_bbox_norm
+        for path in self._images:
+            try:
+                img = _load_qimage(path)
+                if img is None or chip_bbox is None or id_norm is None:
+                    self._signals.batch_image_result.emit(PipelineResult(
+                        original_path=path,
+                        recognized_text=None,
+                        confidence=0.0,
+                        status=ResultStatus.FAILED,
+                    ))
+                    continue
 
-            if img is None or chip_bbox is None or id_norm is None:
+                id_bbox = BoundingBox(
+                    x=chip_bbox.x + id_norm.x * chip_bbox.width,
+                    y=chip_bbox.y + id_norm.y * chip_bbox.height,
+                    width=id_norm.width * chip_bbox.width,
+                    height=id_norm.height * chip_bbox.height,
+                )
+                crop = _crop_qimage(img, id_bbox)
+                ocr_result = self._recognition_engine.recognize_text(crop)
+                accepted = (
+                    ocr_result.confidence >= self._min_confidence
+                    and bool(ocr_result.text.strip())
+                )
+                new_path: Path | None = None
+                if accepted and self._rename_preview:
+                    status = ResultStatus.PENDING
+                elif accepted:
+                    new_path = rename_to_identifier(path, ocr_result.text.strip())
+                    status = ResultStatus.ACCEPTED if new_path else ResultStatus.FAILED
+                else:
+                    status = ResultStatus.FAILED
+
                 self._signals.batch_image_result.emit(PipelineResult(
-                    original_path=self._path,
+                    original_path=path,
+                    recognized_text=ocr_result.text,
+                    confidence=ocr_result.confidence,
+                    status=status,
+                    new_path=new_path,
+                ))
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning("Batch processing error for %s: %s", path.name, exc)
+                self._signals.batch_image_result.emit(PipelineResult(
+                    original_path=path,
                     recognized_text=None,
                     confidence=0.0,
                     status=ResultStatus.FAILED,
                 ))
-                return
-
-            # Direct crop using normalised coordinates applied to detected chip bbox.
-            id_bbox = BoundingBox(
-                x=chip_bbox.x + id_norm.x * chip_bbox.width,
-                y=chip_bbox.y + id_norm.y * chip_bbox.height,
-                width=id_norm.width * chip_bbox.width,
-                height=id_norm.height * chip_bbox.height,
-            )
-            crop = _crop_qimage(img, id_bbox)
-            ocr_result = self._recognition_engine.recognize_text(crop)
-            accepted = (
-                ocr_result.confidence >= self._min_confidence
-                and bool(ocr_result.text.strip())
-            )
-            new_path: Path | None = None
-            if accepted and self._rename_preview:
-                status = ResultStatus.PENDING
-            elif accepted:
-                new_path = rename_to_identifier(self._path, ocr_result.text.strip())
-                status = ResultStatus.ACCEPTED if new_path else ResultStatus.FAILED
-            else:
-                status = ResultStatus.FAILED
-
-            self._signals.batch_image_result.emit(PipelineResult(
-                original_path=self._path,
-                recognized_text=ocr_result.text,
-                confidence=ocr_result.confidence,
-                status=status,
-                new_path=new_path,
-            ))
-        except Exception as exc:  # noqa: BLE001
-            _logger.warning("Batch processing error for %s: %s", self._path.name, exc)
-            self._signals.batch_image_result.emit(PipelineResult(
-                original_path=self._path,
-                recognized_text=None,
-                confidence=0.0,
-                status=ResultStatus.FAILED,
-            ))
 
 
 # ---------------------------------------------------------------------------
@@ -409,12 +410,11 @@ class Pipeline1(AbstractPipeline):
             self.batch_complete.emit()
             return
 
-        for path in images:
-            worker = _BatchImageWorker(
-                path, calib, min_confidence, self._recognition_engine, self._signals,
-                rename_preview=rename_preview,
-            )
-            QThreadPool.globalInstance().start(worker)
+        worker = _SequentialBatchWorker(
+            images, calib, min_confidence, self._recognition_engine, self._signals,
+            rename_preview=rename_preview,
+        )
+        QThreadPool.globalInstance().start(worker)
 
     def _on_batch_image_result(self, result: PipelineResult) -> None:
         if self._stopped:

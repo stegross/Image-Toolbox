@@ -81,10 +81,12 @@ class _RoiTextDetectionWorker(QRunnable):
             self._signals.error.emit(str(exc))
 
 
-class _BatchImageWorker2(QRunnable):
+class _SequentialBatchWorker2(QRunnable):
+    """Processes all batch images sequentially on a single background thread."""
+
     def __init__(
         self,
-        image_path: Path,
+        images: list[Path],
         calib: CalibrationData,
         min_confidence: float,
         detection_engine: AbstractOcrEngine,
@@ -94,7 +96,7 @@ class _BatchImageWorker2(QRunnable):
     ) -> None:
         super().__init__()
         self.setAutoDelete(True)
-        self._path = image_path
+        self._images = images
         self._calib = calib
         self._min_confidence = min_confidence
         self._detection_engine = detection_engine
@@ -103,99 +105,97 @@ class _BatchImageWorker2(QRunnable):
         self._rename_preview = rename_preview
 
     def run(self) -> None:  # noqa: N802
-        try:
-            img = _load_qimage(self._path)
-            if img is None or self._calib.roi_bbox is None or self._calib.reference_resolution is None:
+        roi = self._calib.roi_bbox
+        ref_res = self._calib.reference_resolution
+        for path in self._images:
+            try:
+                img = _load_qimage(path)
+                if img is None or roi is None or ref_res is None:
+                    self._signals.batch_image_result.emit(
+                        PipelineResult(
+                            original_path=path,
+                            recognized_text=None,
+                            confidence=0.0,
+                            status=ResultStatus.FAILED,
+                        )
+                    )
+                    continue
+
+                w, h = img.width(), img.height()
+                ref_w, ref_h = ref_res
+                sx = w / ref_w
+                sy = h / ref_h
+
+                tw = roi.width * sx * _TOLERANCE
+                th = roi.height * sy * _TOLERANCE
+                search = BoundingBox(
+                    x=max(0, roi.x * sx - tw),
+                    y=max(0, roi.y * sy - th),
+                    width=min(w, roi.width * sx + 2 * tw),
+                    height=min(h, roi.height * sy + 2 * th),
+                )
+
+                crop = _crop_qimage(img, search)
+                regions = self._detection_engine.detect_text_regions(crop)
+
+                if not regions:
+                    self._signals.batch_image_result.emit(
+                        PipelineResult(
+                            original_path=path,
+                            recognized_text=None,
+                            confidence=0.0,
+                            status=ResultStatus.FAILED,
+                        )
+                    )
+                    continue
+
+                exp_cx = (roi.x * sx) - search.x + (roi.width * sx) / 2
+                exp_cy = (roi.y * sy) - search.y + (roi.height * sy) / 2
+                best = min(
+                    regions,
+                    key=lambda r: (r.x + r.width / 2 - exp_cx) ** 2
+                    + (r.y + r.height / 2 - exp_cy) ** 2,
+                )
+                id_bbox = BoundingBox(
+                    x=search.x + best.x,
+                    y=search.y + best.y,
+                    width=best.width,
+                    height=best.height,
+                )
+                id_crop = _crop_qimage(img, id_bbox)
+                ocr_result = self._recognition_engine.recognize_text(id_crop)
+                accepted = (
+                    ocr_result.confidence >= self._min_confidence
+                    and bool(ocr_result.text.strip())
+                )
+                new_path: Path | None = None
+                if accepted and self._rename_preview:
+                    status = ResultStatus.PENDING
+                elif accepted:
+                    new_path = rename_to_identifier(path, ocr_result.text.strip())
+                    status = ResultStatus.ACCEPTED if new_path else ResultStatus.FAILED
+                else:
+                    status = ResultStatus.FAILED
+
                 self._signals.batch_image_result.emit(
                     PipelineResult(
-                        original_path=self._path,
+                        original_path=path,
+                        recognized_text=ocr_result.text,
+                        confidence=ocr_result.confidence,
+                        status=status,
+                        new_path=new_path,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning("Batch error for %s: %s", path.name, exc)
+                self._signals.batch_image_result.emit(
+                    PipelineResult(
+                        original_path=path,
                         recognized_text=None,
                         confidence=0.0,
                         status=ResultStatus.FAILED,
                     )
                 )
-                return
-
-            w, h = img.width(), img.height()
-            ref_w, ref_h = self._calib.reference_resolution
-
-            # Scale factors from reference resolution to current image
-            sx = w / ref_w
-            sy = h / ref_h
-
-            roi = self._calib.roi_bbox
-            # Apply scale and add tolerance margin
-            tw = roi.width * sx * _TOLERANCE
-            th = roi.height * sy * _TOLERANCE
-            search = BoundingBox(
-                x=max(0, roi.x * sx - tw),
-                y=max(0, roi.y * sy - th),
-                width=min(w, roi.width * sx + 2 * tw),
-                height=min(h, roi.height * sy + 2 * th),
-            )
-
-            crop = _crop_qimage(img, search)
-            regions = self._detection_engine.detect_text_regions(crop)
-
-            if not regions:
-                self._signals.batch_image_result.emit(
-                    PipelineResult(
-                        original_path=self._path,
-                        recognized_text=None,
-                        confidence=0.0,
-                        status=ResultStatus.FAILED,
-                    )
-                )
-                return
-
-            # Pick region closest to expected ROI centre
-            exp_cx = (roi.x * sx) - search.x + (roi.width * sx) / 2
-            exp_cy = (roi.y * sy) - search.y + (roi.height * sy) / 2
-            best = min(
-                regions,
-                key=lambda r: (r.x + r.width / 2 - exp_cx) ** 2
-                + (r.y + r.height / 2 - exp_cy) ** 2,
-            )
-            id_bbox = BoundingBox(
-                x=search.x + best.x,
-                y=search.y + best.y,
-                width=best.width,
-                height=best.height,
-            )
-            id_crop = _crop_qimage(img, id_bbox)
-            ocr_result = self._recognition_engine.recognize_text(id_crop)
-            accepted = (
-                ocr_result.confidence >= self._min_confidence
-                and bool(ocr_result.text.strip())
-            )
-            new_path: Path | None = None
-            if accepted and self._rename_preview:
-                status = ResultStatus.PENDING
-            elif accepted:
-                new_path = rename_to_identifier(self._path, ocr_result.text.strip())
-                status = ResultStatus.ACCEPTED if new_path else ResultStatus.FAILED
-            else:
-                status = ResultStatus.FAILED
-
-            self._signals.batch_image_result.emit(
-                PipelineResult(
-                    original_path=self._path,
-                    recognized_text=ocr_result.text,
-                    confidence=ocr_result.confidence,
-                    status=status,
-                    new_path=new_path,
-                )
-            )
-        except Exception as exc:  # noqa: BLE001
-            _logger.warning("Batch error for %s: %s", self._path.name, exc)
-            self._signals.batch_image_result.emit(
-                PipelineResult(
-                    original_path=self._path,
-                    recognized_text=None,
-                    confidence=0.0,
-                    status=ResultStatus.FAILED,
-                )
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -308,12 +308,11 @@ class Pipeline2(AbstractPipeline):
             self.batch_complete.emit()
             return
 
-        for path in images:
-            worker = _BatchImageWorker2(
-                path, calib, min_confidence, self._detection_engine, self._recognition_engine,
-                self._signals, rename_preview=rename_preview,
-            )
-            QThreadPool.globalInstance().start(worker)
+        worker = _SequentialBatchWorker2(
+            images, calib, min_confidence, self._detection_engine, self._recognition_engine,
+            self._signals, rename_preview=rename_preview,
+        )
+        QThreadPool.globalInstance().start(worker)
 
     def _on_batch_image_result(self, result: PipelineResult) -> None:
         if self._stopped:
