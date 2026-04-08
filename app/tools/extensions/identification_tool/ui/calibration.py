@@ -258,10 +258,10 @@ class CalibrationWidget(QWidget):
         super().__init__(parent)
         self._setup_ui()
 
-        controller: AbstractCalibrationController = pipeline.create_calibration_controller()
-        controller.calibration_complete.connect(self.calibration_complete)
-        controller.calibration_cancelled.connect(self.calibration_cancelled)
-        controller.start(self, image_paths)
+        self._controller: AbstractCalibrationController = pipeline.create_calibration_controller()
+        self._controller.calibration_complete.connect(self.calibration_complete)
+        self._controller.calibration_cancelled.connect(self.calibration_cancelled)
+        self._controller.start(self, image_paths)
 
     # ------------------------------------------------------------------
     # UI setup
