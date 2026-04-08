@@ -305,6 +305,7 @@ class CalibrationWidget(QWidget):
         if isinstance(self._pipeline, Pipeline2):
             self._step_indicator.set_step(1, 4, "Draw ROI around the identifier")
             self._image_area.start_roi_selection()
+            self._pipeline.start_calibration(self._image_path)
             self._set_buttons([("cancel", "Cancel")])
         else:
             self._step_indicator.set_step(1, 5, "Detecting chip boundary…")
