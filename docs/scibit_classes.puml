@@ -1,0 +1,283 @@
+@startuml SCIBIT Class Diagram
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam defaultFontName Segoe UI
+skinparam defaultFontSize 11
+skinparam classAttributeIconSize 0
+skinparam classFontStyle bold
+
+' ─────────────────────────────────────────────
+' OCR Layer
+' ─────────────────────────────────────────────
+
+package "ocr" {
+    abstract class AbstractOcrEngine {
+        +{abstract} detect_text_regions(image: QImage) : list[DetectedRegion]
+        +{abstract} recognize_text(image: QImage) : OcrResult
+    }
+    class TesseractEngine
+    class PaddleOcrEngine
+    class EasyOcrEngine
+    class OcrResult {
+        +text : str
+        +confidence : float
+    }
+    class DetectedRegion {
+        +x, y, width, height : float
+        +confidence : float
+    }
+
+    TesseractEngine --|> AbstractOcrEngine
+    PaddleOcrEngine --|> AbstractOcrEngine
+    EasyOcrEngine   --|> AbstractOcrEngine
+    AbstractOcrEngine ..> OcrResult
+    AbstractOcrEngine ..> DetectedRegion
+}
+
+' ─────────────────────────────────────────────
+' Data Structures
+' ─────────────────────────────────────────────
+
+package "pipeline.data" {
+    class BoundingBox {
+        +x, y, width, height : float
+        +to_qrectf() : QRectF
+        +{static} from_qrectf(rect) : BoundingBox
+    }
+
+    class CalibrationData {
+        +reference_identifier : str
+    }
+
+    class Pipeline1CalibrationData {
+        +chip_bbox : BoundingBox
+        +identifier_bbox_norm : BoundingBox
+        +chip_aspect_ratio : float
+    }
+
+    class Pipeline2CalibrationData {
+        +roi_bbox : BoundingBox
+        +reference_resolution : tuple[int,int]
+    }
+
+    class PipelineResult {
+        +original_path : Path
+        +recognized_text : str
+        +confidence : float
+        +status : ResultStatus
+        +new_path : Path
+    }
+
+    enum ResultStatus {
+        ACCEPTED
+        PENDING
+        FAILED
+        MANUAL
+    }
+
+    CalibrationData <|-- Pipeline1CalibrationData
+    CalibrationData <|-- Pipeline2CalibrationData
+    Pipeline1CalibrationData *-- BoundingBox
+    Pipeline2CalibrationData *-- BoundingBox
+    PipelineResult --> ResultStatus
+}
+
+' ─────────────────────────────────────────────
+' Shared Workers (base.py)
+' ─────────────────────────────────────────────
+
+package "pipeline.base" {
+    class WorkerSignals << (Q,#aaddff) QObject >> {
+        +chip_result : Signal
+        +chip_failed : Signal
+        +text_regions_result : Signal
+        +ocr_result : Signal
+        +batch_image_result : Signal
+        +error : Signal
+    }
+
+    class OcrWorker << (R,#ffddaa) QRunnable >> {
+        +run()
+    }
+
+    abstract class AbstractPipeline << (Q,#aaddff) QObject >> {
+        #_detection_engine : AbstractOcrEngine
+        #_recognition_engine : AbstractOcrEngine
+        #_stopped : bool
+        +{abstract} start_calibration(image)
+        +{abstract} confirm_ocr_result(text)
+        +{abstract} start_batch(images, calib, min_conf, rename_preview)
+        +create_calibration_controller()
+        +reset()
+        +stop()
+        ..signals..
+        +ocr_result_ready
+        +calibration_complete
+        +calibration_error
+        +image_processed
+        +progress_updated
+        +batch_complete
+    }
+
+    abstract class AbstractCalibrationController << (Q,#aaddff) QObject >> {
+        +{abstract} start(widget, image_paths)
+        ..signals..
+        +calibration_complete
+        +calibration_cancelled
+    }
+
+    AbstractPipeline --> AbstractOcrEngine : uses
+    AbstractPipeline *-- WorkerSignals
+    AbstractPipeline ..> AbstractCalibrationController : creates via\nCalibrationController(self)
+    OcrWorker --> WorkerSignals : emits
+    OcrWorker --> AbstractOcrEngine : calls
+}
+
+' ─────────────────────────────────────────────
+' Pipeline 1
+' ─────────────────────────────────────────────
+
+package "pipeline1" {
+    class Pipeline1 << (Q,#aaddff) QObject >> {
+        +confirm_chip(accepted, polygon)
+        +set_identifier_bbox(rect)
+        ..signals..
+        +chip_detected
+        +chip_detection_failed
+        +text_regions_detected
+    }
+
+    class _ChipDetectionWorker << (R,#ffddaa) QRunnable >>
+    class _TextDetectionWorker << (R,#ffddaa) QRunnable >>
+    class _SequentialBatchWorker << (R,#ffddaa) QRunnable >> {
+        +run()
+    }
+
+    class _Pipeline1CalibrationController {
+        -_pipeline : Pipeline1
+        -_image_index : int
+        +start(widget, image_paths)
+        -_step1()
+        -_on_chip_detected()
+        -_on_text_regions_detected()
+        -_on_ocr_result_ready()
+    }
+
+    AbstractPipeline <|-- Pipeline1
+    Pipeline1 ..> Pipeline1CalibrationData : emits
+    Pipeline1 *-- _ChipDetectionWorker
+    Pipeline1 *-- _TextDetectionWorker
+    Pipeline1 *-- _SequentialBatchWorker
+    AbstractCalibrationController <|-- _Pipeline1CalibrationController
+    _Pipeline1CalibrationController --> Pipeline1 : drives
+    Pipeline1 "CalibrationController" *-- _Pipeline1CalibrationController
+}
+
+' ─────────────────────────────────────────────
+' Pipeline 2
+' ─────────────────────────────────────────────
+
+package "pipeline2" {
+    class Pipeline2 << (Q,#aaddff) QObject >> {
+        +set_roi(rect)
+        +confirm_roi(accepted)
+        ..signals..
+        +roi_confirmed
+    }
+
+    class _RoiTextDetectionWorker << (R,#ffddaa) QRunnable >>
+    class _SequentialBatchWorker2 << (R,#ffddaa) QRunnable >> {
+        +run()
+    }
+
+    class _Pipeline2CalibrationController {
+        -_pipeline : Pipeline2
+        -_image_index : int
+        +start(widget, image_paths)
+        -_step1()
+        -_on_roi_drawn()
+        -_on_roi_confirmed()
+        -_on_ocr_result_ready()
+    }
+
+    AbstractPipeline <|-- Pipeline2
+    Pipeline2 ..> Pipeline2CalibrationData : emits
+    Pipeline2 *-- _RoiTextDetectionWorker
+    Pipeline2 *-- _SequentialBatchWorker2
+    AbstractCalibrationController <|-- _Pipeline2CalibrationController
+    _Pipeline2CalibrationController --> Pipeline2 : drives
+    Pipeline2 "CalibrationController" *-- _Pipeline2CalibrationController
+}
+
+' ─────────────────────────────────────────────
+' UI Layer
+' ─────────────────────────────────────────────
+
+package "ui" {
+    class CalibrationWidget << (Q,#aaddff) QWidget >> {
+        +load_image(path)
+        +set_step(current, total, desc)
+        +set_buttons(specs)
+        +button(name) : QPushButton
+        +start_roi_selection(mode)
+        +stop_roi_selection()
+        +show_rect_overlay(rect, color, width)
+        +show_rects_overlay(rects, color, width)
+        +clear_overlays()
+        +show_ocr_panel(text)
+        +hide_ocr_panel()
+        +show_error(message)
+        +selected_scene_items()
+        ..signals..
+        +roi_drawn
+        +ocr_confirmed
+        +scene_selection_changed
+        +calibration_complete
+        +calibration_cancelled
+    }
+
+    class ResultsWidget << (Q,#aaddff) QWidget >> {
+        -_result_map : dict
+        -_review_paths : list
+        -_review_index : int
+        ..signals..
+        +batch_complete
+    }
+
+    class _ReviewPanel << (Q,#aaddff) QWidget >> {
+        +load_result(result)
+        ..signals..
+        +rename_applied
+        +skipped
+        +navigate
+    }
+
+    CalibrationWidget --> AbstractCalibrationController : created by\npipeline
+    AbstractCalibrationController --> CalibrationWidget : drives via API
+    ResultsWidget *-- _ReviewPanel
+    ResultsWidget ..> PipelineResult : displays
+}
+
+' ─────────────────────────────────────────────
+' Tool
+' ─────────────────────────────────────────────
+
+package "tool" {
+    class SciBitTool << (Q,#aaddff) QWidget >> {
+        -_current_pipeline : AbstractPipeline
+        -_images : list[Path]
+        -_calib_data : CalibrationData
+        -_folder : Path
+        +open_from_path(path)
+        -_start()
+        -_stop()
+        -_show_calibration_widget()
+        -_show_results_widget()
+    }
+
+    SciBitTool --> AbstractPipeline : owns
+    SciBitTool --> CalibrationWidget : shows
+    SciBitTool --> ResultsWidget : shows
+}
+
+@enduml

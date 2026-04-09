@@ -11,7 +11,6 @@ from typing import ClassVar
 
 from PySide6.QtCore import (
     QAbstractTableModel,
-    QEvent,
     QModelIndex,
     QObject,
     QRunnable,
@@ -20,15 +19,12 @@ from PySide6.QtCore import (
     QThreadPool,
     Signal,
 )
-from PySide6.QtGui import QIcon, QImageReader, QKeySequence, QPainter, QPixmap, QShortcut, QWheelEvent
+from PySide6.QtGui import QIcon, QImageReader, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
     QFormLayout,
     QFrame,
-    QGraphicsPixmapItem,
-    QGraphicsScene,
-    QGraphicsView,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -46,14 +42,14 @@ from PySide6.QtWidgets import (
 
 from app.core.config import ConfigManager
 from app.plugin.base import IBaseToolPlugin
+from app.tools._shared.image_widgets import ImageArea as _ImageArea
+from app.tools._shared.image_widgets import PanZoomView as _PanZoomView
 
 _logger = logging.getLogger("vi_toolbox.tools.image_viewer")
 
 _SUPPORTED_EXTENSIONS: frozenset[str] = frozenset({
     ".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".gif",
 })
-
-_ARROW_HOVER_MARGIN = 60  # px from left/right edge that triggers arrow visibility
 
 _THUMB_SIZE = QSize(64, 48)
 _THUMB_ROW_HEIGHT = 56
@@ -347,198 +343,6 @@ class _ImageListPanel(QWidget):
             new_cols.append(toggled)
         self._model.set_columns(new_cols)
         self._save_columns_config()
-
-
-# ---------------------------------------------------------------------------
-# Pan / zoom graphics view
-# ---------------------------------------------------------------------------
-
-
-class _PanZoomView(QGraphicsView):
-    """QGraphicsView with mouse-wheel zoom and click-drag pan."""
-
-    _ZOOM_FACTOR = 1.15
-
-    def __init__(self, scene: QGraphicsScene, parent: QWidget | None = None) -> None:
-        super().__init__(scene, parent)
-        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
-        self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
-        self.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
-    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
-        """Zoom in/out on scroll wheel."""
-        factor = self._ZOOM_FACTOR if event.angleDelta().y() > 0 else 1.0 / self._ZOOM_FACTOR
-        self.scale(factor, factor)
-
-
-# ---------------------------------------------------------------------------
-# Image area: graphics view + overlay labels + navigation arrows
-# ---------------------------------------------------------------------------
-
-
-class _ImageArea(QWidget):
-    """Container widget hosting the pan/zoom view with HUD overlays and nav arrows.
-
-    The folder path and current filename are rendered as semi-transparent
-    overlays in the top-left corner.  Left/right navigation arrow buttons
-    appear when the cursor is within :data:`_ARROW_HOVER_MARGIN` pixels of
-    the respective edge.
-
-    Signals
-    -------
-    navigate_left
-        Emitted when the left arrow is clicked.
-    navigate_right
-        Emitted when the right arrow is clicked.
-    """
-
-    navigate_left = Signal()
-    navigate_right = Signal()
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-
-        self._scene = QGraphicsScene(self)
-        self._pixmap_item = QGraphicsPixmapItem()
-        self._scene.addItem(self._pixmap_item)
-
-        self._view = _PanZoomView(self._scene, self)
-
-        # HUD overlay labels (children of this widget, drawn on top of the view)
-        self._folder_label = self._make_overlay_label()
-        self._filename_label = self._make_overlay_label()
-
-        # Navigation arrow buttons
-        self._left_btn = self._make_arrow_button("❮")
-        self._right_btn = self._make_arrow_button("❯")
-        self._left_btn.hide()
-        self._right_btn.hide()
-        self._left_btn.clicked.connect(self.navigate_left)
-        self._right_btn.clicked.connect(self.navigate_right)
-
-        self._arrows_enabled = False
-
-        # Enable mouse tracking on the viewport to detect edge hover
-        self._view.viewport().setMouseTracking(True)
-        self._view.viewport().installEventFilter(self)
-
-    # ------------------------------------------------------------------
-    # Factory helpers
-    # ------------------------------------------------------------------
-
-    def _make_overlay_label(self) -> QLabel:
-        label = QLabel(self)
-        label.setStyleSheet(
-            "background-color: rgba(0, 0, 0, 145); color: white;"
-            " padding: 2px 6px; border-radius: 3px;"
-        )
-        label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        label.hide()
-        return label
-
-    def _make_arrow_button(self, text: str) -> QPushButton:
-        btn = QPushButton(text, self)
-        btn.setStyleSheet(
-            "QPushButton {"
-            "  background-color: rgba(0, 0, 0, 120); color: white;"
-            "  font-size: 22px; border: none; border-radius: 4px; padding: 8px 6px;"
-            "}"
-            "QPushButton:hover { background-color: rgba(0, 0, 0, 210); }"
-        )
-        btn.setFixedWidth(38)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        return btn
-
-    # ------------------------------------------------------------------
-    # Public interface
-    # ------------------------------------------------------------------
-
-    def set_pixmap(self, pixmap: QPixmap) -> None:
-        """Display *pixmap* and fit it to the current viewport."""
-        self._pixmap_item.setPixmap(pixmap)
-        self._scene.setSceneRect(self._pixmap_item.boundingRect())
-        self._fit_pixmap()
-
-    def _fit_pixmap(self) -> None:
-        """Fit the current pixmap to the viewport (no-op if no pixmap loaded)."""
-        if not self._pixmap_item.pixmap().isNull():
-            self._view.resetTransform()
-            self._view.fitInView(self._pixmap_item, Qt.AspectRatioMode.KeepAspectRatio)
-
-    def set_folder_text(self, text: str) -> None:
-        """Update the folder path overlay."""
-        self._folder_label.setText(text)
-        self._folder_label.adjustSize()
-        self._folder_label.show()
-        self._reposition_overlays()
-
-    def set_filename_text(self, text: str) -> None:
-        """Update the filename overlay."""
-        self._filename_label.setText(text)
-        self._filename_label.adjustSize()
-        self._filename_label.show()
-        self._reposition_overlays()
-
-    def set_arrows_enabled(self, enabled: bool) -> None:
-        """Enable or suppress navigation arrows (disable for single-image folders)."""
-        self._arrows_enabled = enabled
-        if not enabled:
-            self._left_btn.hide()
-            self._right_btn.hide()
-
-    def clear(self) -> None:
-        """Remove the displayed image and hide all overlays."""
-        self._pixmap_item.setPixmap(QPixmap())
-        self._folder_label.hide()
-        self._filename_label.hide()
-
-    # ------------------------------------------------------------------
-    # Layout
-    # ------------------------------------------------------------------
-
-    def resizeEvent(self, event) -> None:  # noqa: N802
-        super().resizeEvent(event)
-        self._view.setGeometry(self.rect())
-        self._fit_pixmap()
-        self._reposition_overlays()
-
-    def _reposition_overlays(self) -> None:
-        margin = 8
-        y = margin
-        for label in (self._folder_label, self._filename_label):
-            if label.isVisible():
-                label.move(margin, y)
-                y += label.height() + 2
-
-        btn_h = 60
-        arrow_y = max(0, (self.height() - btn_h) // 2)
-        self._left_btn.setFixedHeight(btn_h)
-        self._right_btn.setFixedHeight(btn_h)
-        self._left_btn.move(8, arrow_y)
-        self._right_btn.move(self.width() - self._right_btn.width() - 8, arrow_y)
-
-    # ------------------------------------------------------------------
-    # Viewport event filter (mouse tracking for arrows)
-    # ------------------------------------------------------------------
-
-    def leaveEvent(self, event) -> None:  # noqa: N802
-        """Hide navigation arrows when the cursor leaves the entire widget."""
-        super().leaveEvent(event)
-        self._left_btn.hide()
-        self._right_btn.hide()
-
-    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if watched is self._view.viewport():
-            if event.type() == QEvent.Type.MouseMove and self._arrows_enabled:
-                x = event.position().x()
-                vw = self._view.viewport().width()
-                self._left_btn.setVisible(x < _ARROW_HOVER_MARGIN)
-                self._right_btn.setVisible(x > vw - _ARROW_HOVER_MARGIN)
-        return super().eventFilter(watched, event)
 
 
 # ---------------------------------------------------------------------------
