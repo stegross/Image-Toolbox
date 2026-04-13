@@ -9,8 +9,8 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QRectF, QRunnable, QThreadPool, Signal
 from PySide6.QtGui import QColor
 
-from app.tools.extensions.identification_tool.ocr.base import AbstractOcrEngine
-from app.tools.extensions.identification_tool.pipeline.base import (
+from app.tools.identification_tool.ocr.base import AbstractOcrEngine
+from app.tools.identification_tool.pipeline.base import (
     AbstractCalibrationController,
     AbstractPipeline,
     BoundingBox,

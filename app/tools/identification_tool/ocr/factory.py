@@ -4,20 +4,20 @@ from __future__ import annotations
 
 import importlib
 
-from app.tools.extensions.identification_tool.ocr.base import AbstractOcrEngine
+from app.tools.identification_tool.ocr.base import AbstractOcrEngine
 
 # Maps the display name (as shown in the UI) to (module, class).
 _ENGINE_MAP: dict[str, tuple[str, str]] = {
     "Tesseract": (
-        "app.tools.extensions.identification_tool.ocr.tesseract",
+        "app.tools.identification_tool.ocr.tesseract",
         "TesseractEngine",
     ),
     "PaddleOCR": (
-        "app.tools.extensions.identification_tool.ocr.paddleocr_engine",
+        "app.tools.identification_tool.ocr.paddleocr_engine",
         "PaddleOcrEngine",
     ),
     "EasyOCR": (
-        "app.tools.extensions.identification_tool.ocr.easyocr_engine",
+        "app.tools.identification_tool.ocr.easyocr_engine",
         "EasyOcrEngine",
     ),
 }

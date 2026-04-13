@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.tools._shared.image_widgets import ImageArea
-from app.tools.extensions.identification_tool.pipeline.base import (
+from app.tools.identification_tool.pipeline.base import (
     AbstractPipeline,
     CalibrationData,
     PipelineResult,

@@ -27,17 +27,17 @@ from PySide6.QtWidgets import (
 from app.core.config import ConfigManager
 from app.plugin.base import IToolPlugin
 from app.plugin.categories import ToolCategory
-from app.tools.extensions.identification_tool.config import (
+from app.tools.identification_tool.config import (
     DETECTION_FRAMEWORKS,
     OCR_FRAMEWORKS,
     load_identifier_configs,
 )
-from app.tools.extensions.identification_tool.ocr.factory import create_engine
-from app.tools.extensions.identification_tool.pipeline.base import AbstractPipeline, CalibrationData
-from app.tools.extensions.identification_tool.pipeline.pipeline1 import Pipeline1
-from app.tools.extensions.identification_tool.pipeline.pipeline2 import Pipeline2
-from app.tools.extensions.identification_tool.ui.calibration import CalibrationWidget
-from app.tools.extensions.identification_tool.ui.results import ResultsWidget
+from app.tools.identification_tool.ocr.factory import create_engine
+from app.tools.identification_tool.pipeline.base import AbstractPipeline, CalibrationData
+from app.tools.identification_tool.pipeline.pipeline1 import Pipeline1
+from app.tools.identification_tool.pipeline.pipeline2 import Pipeline2
+from app.tools.identification_tool.ui.calibration import CalibrationWidget
+from app.tools.identification_tool.ui.results import ResultsWidget
 
 _logger = logging.getLogger("vi_toolbox.tools.scibit")
 

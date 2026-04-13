@@ -10,7 +10,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QRect, QRectF, QRunnable, Signal
 from PySide6.QtGui import QImage
 
-from app.tools.extensions.identification_tool.ocr.base import AbstractOcrEngine
+from app.tools.identification_tool.ocr.base import AbstractOcrEngine
 
 
 # ---------------------------------------------------------------------------
