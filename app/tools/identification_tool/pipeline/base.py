@@ -7,8 +7,8 @@ from abc import abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRect, QRectF, QRunnable, Signal
-from PySide6.QtGui import QImage
+from PySide6.QtCore import QObject, QRect, QRectF, QRunnable, Qt, Signal
+from PySide6.QtGui import QImage, QTransform
 
 from app.tools.identification_tool.ocr.base import AbstractOcrEngine
 
@@ -44,9 +44,13 @@ class CalibrationData:
 
     The single shared field is ``reference_identifier``: the user-confirmed
     OCR text from the first image, common to every pipeline.
+    ``rotation_degrees`` stores the clockwise rotation chosen in the
+    universal rotation step and is applied to every batch image.
     """
 
     reference_identifier: str = ""
+    rotation_degrees: float = 0.0
+    invert_colors: bool = False
 
 
 class ResultStatus(enum.Enum):
@@ -134,6 +138,21 @@ def load_qimage(path: Path) -> QImage | None:
     return img.convertToFormat(QImage.Format.Format_Grayscale8)
 
 
+def rotate_qimage(img: QImage, degrees: float) -> QImage:
+    """Return *img* rotated clockwise by *degrees*. Returns *img* unchanged if 0."""
+    if degrees == 0:
+        return img
+    transform = QTransform().rotate(degrees)
+    return img.transformed(transform, Qt.TransformationMode.SmoothTransformation)
+
+
+def invert_qimage(img: QImage) -> QImage:
+    """Return a color-inverted copy of *img*."""
+    copy = img.copy()
+    copy.invertPixels()
+    return copy
+
+
 def crop_qimage(img: QImage, bbox: BoundingBox) -> QImage:
     """Return a copy of *img* cropped to *bbox*, clamped to image bounds."""
     x = max(0, int(bbox.x))
@@ -152,6 +171,8 @@ class OcrWorker(QRunnable):
         identifier_bbox: BoundingBox,
         recognition_engine: AbstractOcrEngine,
         signals: WorkerSignals,
+        rotation_degrees: float = 0.0,
+        invert_colors: bool = False,
     ) -> None:
         super().__init__()
         self.setAutoDelete(True)
@@ -159,6 +180,8 @@ class OcrWorker(QRunnable):
         self._bbox = identifier_bbox
         self._recognition_engine = recognition_engine
         self._signals = signals
+        self._rotation_degrees = rotation_degrees
+        self._invert_colors = invert_colors
 
     def run(self) -> None:  # noqa: N802
         try:
@@ -166,6 +189,9 @@ class OcrWorker(QRunnable):
             if img is None:
                 self._signals.error.emit(f"Cannot read image: {self._path.name}")
                 return
+            img = rotate_qimage(img, self._rotation_degrees)
+            if self._invert_colors:
+                img = invert_qimage(img)
             crop = crop_qimage(img, self._bbox)
             result = self._recognition_engine.recognize_text(crop)
             self._signals.ocr_result.emit(result.text, result.confidence)
@@ -250,6 +276,20 @@ class AbstractPipeline(QObject):
         self._detection_engine = detection_engine
         self._recognition_engine = recognition_engine
         self._stopped = False
+        self._rotation_degrees: float = 0.0
+        self._invert_colors: bool = False
+
+    def set_rotation(self, degrees: float) -> None:
+        """Store the clockwise rotation chosen in the universal rotation step."""
+        self._rotation_degrees = degrees
+
+    def set_invert_colors(self, invert: bool) -> None:
+        """Store whether image colors should be inverted before processing."""
+        self._invert_colors = invert
+
+    @property
+    def invert_colors(self) -> bool:
+        return self._invert_colors
 
     # ------------------------------------------------------------------
     # Calibration interface

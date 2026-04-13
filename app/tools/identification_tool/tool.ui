@@ -250,6 +250,21 @@
           </widget>
          </item>
 
+         <item row="6" column="0">
+          <widget class="QLabel" name="invert_color_label">
+           <property name="text">
+            <string>Color:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="6" column="1">
+          <widget class="QCheckBox" name="invert_color_check">
+           <property name="text">
+            <string>Invert colors (use for bright text on dark background)</string>
+           </property>
+          </widget>
+         </item>
+
         </layout>
        </widget>
       </item>

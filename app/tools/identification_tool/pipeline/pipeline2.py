@@ -20,8 +20,10 @@ from app.tools.identification_tool.pipeline.base import (
     ResultStatus,
     WorkerSignals,
     crop_qimage,
+    invert_qimage,
     load_qimage,
     rename_to_identifier,
+    rotate_qimage,
 )
 
 _logger = logging.getLogger("vi_toolbox.tools.scibit.pipeline2")
@@ -93,6 +95,11 @@ class _SequentialBatchWorker2(QRunnable):
                     ))
                     continue
 
+                # Rotate then invert so all coordinate math is in the transformed space,
+                # matching the rotated reference_resolution stored at calibration time.
+                img = rotate_qimage(img, self._calib.rotation_degrees)
+                if self._calib.invert_colors:
+                    img = invert_qimage(img)
                 w, h = img.width(), img.height()
                 ref_w, ref_h = ref_res
                 sx, sy = w / ref_w, h / ref_h
@@ -100,6 +107,7 @@ class _SequentialBatchWorker2(QRunnable):
                 # Scale the user-selected ROI and expand by tolerance on each side.
                 tw = roi.width * sx * _TOLERANCE
                 th = roi.height * sy * _TOLERANCE
+
                 id_bbox = BoundingBox(
                     x=max(0, roi.x * sx - tw),
                     y=max(0, roi.y * sy - th),
@@ -199,7 +207,9 @@ class Pipeline2(AbstractPipeline):
         if self._roi_bbox is None:
             return
         worker = OcrWorker(
-            self._ref_image, self._roi_bbox, self._recognition_engine, self._signals
+            self._ref_image, self._roi_bbox, self._recognition_engine, self._signals,
+            rotation_degrees=self._rotation_degrees,
+            invert_colors=self._invert_colors,
         )
         QThreadPool.globalInstance().start(worker)
 
@@ -211,10 +221,16 @@ class Pipeline2(AbstractPipeline):
     def confirm_ocr_result(self, text: str) -> None:
         if self._stopped or self._ref_image is None or self._roi_bbox is None:
             return
-        from PySide6.QtGui import QImageReader
-        reader = QImageReader(str(self._ref_image))
-        size = reader.size()
-        ref_res = (size.width(), size.height()) if size.isValid() else (1000, 1000)
+        # Store the *rotated* dimensions so batch workers scale in the same space.
+        ref_img = load_qimage(self._ref_image)
+        if ref_img is not None:
+            ref_img = rotate_qimage(ref_img, self._rotation_degrees)
+            ref_res = (ref_img.width(), ref_img.height())
+        else:
+            from PySide6.QtGui import QImageReader
+            reader = QImageReader(str(self._ref_image))
+            size = reader.size()
+            ref_res = (size.width(), size.height()) if size.isValid() else (1000, 1000)
         calib = Pipeline2CalibrationData(
             roi_bbox=self._roi_bbox,
             reference_resolution=ref_res,

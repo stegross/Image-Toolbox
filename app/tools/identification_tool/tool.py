@@ -51,6 +51,7 @@ _CFG_DETECTION = "detection_framework_index"
 _CFG_OCR = "ocr_framework_index"
 _CFG_MIN_CONF = "min_confidence"
 _CFG_RENAME_PREVIEW = "rename_preview"
+_CFG_INVERT_COLOR = "invert_color"
 _CFG_CONFIG_EXPANDED = "config_expanded"
 
 
@@ -168,6 +169,7 @@ class SciBitTool(QWidget, IToolPlugin, metaclass=_SciBitMeta):
         self._ocr_framework_combo: QComboBox = self._form.findChild(QComboBox, "ocr_framework_combo")
         self._min_confidence_spin: QDoubleSpinBox = self._form.findChild(QDoubleSpinBox, "min_confidence_spin")
         self._rename_preview_check: QCheckBox = self._form.findChild(QCheckBox, "rename_preview_check")
+        self._invert_color_check: QCheckBox = self._form.findChild(QCheckBox, "invert_color_check")
         self._process_area_frame: QFrame = self._form.findChild(QFrame, "process_area_frame")
 
         # -- Connect control bar signals --
@@ -218,6 +220,8 @@ class SciBitTool(QWidget, IToolPlugin, metaclass=_SciBitMeta):
             self._ocr_framework_combo.setCurrentIndex(cfg.get(_CFG_OCR, 0))
             self._min_confidence_spin.setValue(cfg.get(_CFG_MIN_CONF, 0.75))
             self._rename_preview_check.setChecked(cfg.get(_CFG_RENAME_PREVIEW, False))
+            if self._invert_color_check:
+                self._invert_color_check.setChecked(cfg.get(_CFG_INVERT_COLOR, False))
 
     def _save_config(self) -> None:
         cfg = self._config_manager.get_tool_config(self.name)
@@ -229,6 +233,7 @@ class SciBitTool(QWidget, IToolPlugin, metaclass=_SciBitMeta):
             cfg[_CFG_OCR] = self._ocr_framework_combo.currentIndex()
             cfg[_CFG_MIN_CONF] = self._min_confidence_spin.value()
             cfg[_CFG_RENAME_PREVIEW] = self._rename_preview_check.isChecked()
+            cfg[_CFG_INVERT_COLOR] = self._invert_color_check.isChecked() if self._invert_color_check else False
         self._config_manager.set_tool_config(self.name, cfg)
         self._config_manager.save(self.name)
 
@@ -309,6 +314,9 @@ class SciBitTool(QWidget, IToolPlugin, metaclass=_SciBitMeta):
             self._current_pipeline = Pipeline1(detection_engine, recognition_engine, self)
         else:
             self._current_pipeline = Pipeline2(detection_engine, recognition_engine, self)
+
+        invert_colors = self._invert_color_check.isChecked() if self._invert_color_check else False
+        self._current_pipeline.set_invert_colors(invert_colors)
 
         self._t_start = time.monotonic()
         self._t_calib_done: float | None = None
