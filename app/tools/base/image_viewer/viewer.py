@@ -41,7 +41,8 @@ from PySide6.QtWidgets import (
 )
 
 from app.core.config import ConfigManager
-from app.plugin.base import IBaseToolPlugin
+from app.plugin.base import IToolPlugin
+from app.plugin.categories import ToolCategory
 from app.tools._shared.image_widgets import ImageArea as _ImageArea
 from app.tools._shared.image_widgets import PanZoomView as _PanZoomView
 
@@ -463,7 +464,7 @@ class _ImageViewerMeta(type(QWidget), ABCMeta):
 # ---------------------------------------------------------------------------
 
 
-class ImageViewer(QWidget, IBaseToolPlugin, metaclass=_ImageViewerMeta):
+class ImageViewer(QWidget, IToolPlugin, metaclass=_ImageViewerMeta):
     """Zoomable image viewer with folder navigation and metadata panel (REQ-HS-021).
 
     Can be opened standalone or driven externally by any tool that calls
@@ -479,11 +480,11 @@ class ImageViewer(QWidget, IBaseToolPlugin, metaclass=_ImageViewerMeta):
     """
 
     name: ClassVar[str] = "Image Viewer"
+    category: ClassVar[ToolCategory] = ToolCategory.BASE
     description: ClassVar[str] = "Browse and inspect images from a folder."
     icon_path: ClassVar[str] = ""
     version: ClassVar[str] = "1.0.0"
     logger_name: ClassVar[str] = "vi_toolbox.tools.image_viewer"
-    auto_open_on_startup: ClassVar[bool] = False
     allow_multiple_instances: ClassVar[bool] = True
     closable: ClassVar[bool] = True
     handled_path_extensions: ClassVar[frozenset[str]] = _SUPPORTED_EXTENSIONS

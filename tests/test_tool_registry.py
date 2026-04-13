@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from app.plugin.base import IBaseToolPlugin, IToolPlugin
+from app.plugin.base import IToolPlugin
 from app.plugin.categories import ToolCategory
 from app.plugin.registry import ToolRegistry
 
@@ -40,8 +40,9 @@ class _ToolB(IToolPlugin):
         return _FakeWidget()
 
 
-class _BaseTool(IBaseToolPlugin):
+class _BaseTool(IToolPlugin):
     name = "Base Tool"
+    category = ToolCategory.BASE
     description = "Fake base tool"
     icon_path = ""
     version = "1.0.0"
@@ -87,7 +88,7 @@ class TestToolRegistryQuery:
         """Register tools used across query tests."""
         ToolRegistry.register(_ToolA)
         ToolRegistry.register(_ToolB)
-        ToolRegistry.register(_BaseTool)
+        ToolRegistry.register(_BaseTool, auto_open=True)
         self.registry = ToolRegistry()
 
     def test_get_tool_unknown_raises(self) -> None:
@@ -113,10 +114,10 @@ class TestToolRegistryQuery:
         assert ToolCategory.BASE in categories
         assert ToolCategory.IDENTIFICATION in categories
 
-    def test_get_base_tools(self) -> None:
-        """Returns only IBaseToolPlugin subclasses."""
-        base = self.registry.get_base_tools()
-        assert base == [_BaseTool]
+    def test_get_auto_open_tools(self) -> None:
+        """Returns only tools registered with auto_open=True."""
+        auto = self.registry.get_auto_open_tools()
+        assert auto == [_BaseTool]
 
 
 class TestToolRegistryInstances:

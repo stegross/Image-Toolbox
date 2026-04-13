@@ -12,7 +12,6 @@ from PySide6QtAds import CDockManager
 
 from app.core.config import ConfigManager
 from app.core.roles import RoleManager
-from app.plugin.base import IBaseToolPlugin
 from app.plugin.registry import ToolRegistry
 from app.shell.docking_manager import DockingManager
 from app.shell.layout import LayoutPersistence
@@ -150,10 +149,7 @@ class MainWindow(QMainWindow):
 
         instance_key, instance_id = self._tool_registry.allocate_instance_key(name, allow_multiple)
 
-        if issubclass(tool_cls, IBaseToolPlugin):
-            tool_instance = tool_cls(self._config_manager)
-        else:
-            tool_instance = tool_cls()
+        tool_instance = tool_cls(self._config_manager)
         tool_instance._assign_instance_id(instance_id)
         widget = tool_instance.create_widget(self)
         closable = getattr(tool_cls, "closable", True)
@@ -263,9 +259,8 @@ class MainWindow(QMainWindow):
         exists (e.g. very first launch or after the state files are deleted).
         """
         self.resize(1400, 900)
-        for tool_cls in self._tool_registry.get_base_tools():
-            if getattr(tool_cls, "auto_open_on_startup", False):
-                self.open_tool(tool_cls.name)
+        for tool_cls in self._tool_registry.get_auto_open_tools():
+            self.open_tool(tool_cls.name)
 
     def _on_open_tool_with_path(self, tool_name: str, path: object) -> None:
         """Open a fresh instance of *tool_name* and load *path* into it.

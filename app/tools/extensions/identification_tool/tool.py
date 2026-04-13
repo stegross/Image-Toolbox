@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.core.config import ConfigManager
-from app.plugin.base import IBaseToolPlugin
+from app.plugin.base import IToolPlugin
 from app.plugin.categories import ToolCategory
 from app.tools.extensions.identification_tool.config import (
     DETECTION_FRAMEWORKS,
@@ -68,7 +68,7 @@ class _SciBitMeta(type(QWidget), ABCMeta):
 # ---------------------------------------------------------------------------
 
 
-class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
+class SciBitTool(QWidget, IToolPlugin, metaclass=_SciBitMeta):
     """Single Chip Image Batch Identification Tool.
 
     Processes a folder of chip images, recognises the identifier printed on
@@ -89,7 +89,6 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
     icon_path: ClassVar[str] = ""
     version: ClassVar[str] = "1.0.0"
     logger_name: ClassVar[str] = "vi_toolbox.tools.scibit"
-    auto_open_on_startup: ClassVar[bool] = False
     allow_multiple_instances: ClassVar[bool] = False
     closable: ClassVar[bool] = True
     handles_folders: ClassVar[bool] = True

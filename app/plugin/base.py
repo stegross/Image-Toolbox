@@ -68,6 +68,11 @@ class IToolPlugin(ABC):
             The tool's main widget to embed in the dock area.
         """
 
+    #: Whether more than one instance of this tool may be open simultaneously.
+    allow_multiple_instances: ClassVar[bool] = False
+    #: Whether the user can close this tool's dock widget.
+    closable: ClassVar[bool] = True
+
     #: Numerical instance identifier assigned by MainWindow after construction.
     #: ``0`` for single-instance tools; ``1``, ``2``, … for multi-instance tools.
     _instance_id: int = 0
@@ -142,31 +147,3 @@ class IToolPlugin(ABC):
             "description": self.description,
             "version": self.version,
         }
-
-
-class IBaseToolPlugin(IToolPlugin, ABC):
-    """Abstract base class for base (always-open, non-closable) tools.
-
-    Extends :class:`IToolPlugin` with defaults appropriate for base tools.
-    Base tools open automatically on startup, allow multiple instances, and
-    cannot be closed by the user.
-
-    Attributes
-    ----------
-    auto_open_on_startup : bool
-        If ``True``, the tool is opened automatically when the application
-        starts. Default: ``True``.
-    allow_multiple_instances : bool
-        If ``True``, more than one instance of this tool may be opened at
-        the same time. Default: ``True``.
-    closable : bool
-        If ``False``, the user cannot close this tool's dock widget.
-        Default: ``False``.
-    category : ToolCategory
-        Navigation menu category. Default: :attr:`~ToolCategory.BASE`.
-    """
-
-    auto_open_on_startup: ClassVar[bool] = True
-    allow_multiple_instances: ClassVar[bool] = True
-    closable: ClassVar[bool] = False
-    category: ClassVar[ToolCategory] = ToolCategory.BASE

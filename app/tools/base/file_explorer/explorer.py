@@ -21,7 +21,8 @@ from PySide6.QtWidgets import (
 )
 
 from app.core.config import ConfigManager
-from app.plugin.base import IBaseToolPlugin
+from app.plugin.base import IToolPlugin
+from app.plugin.categories import ToolCategory
 
 _logger = logging.getLogger("vi_toolbox.tools.file_explorer")
 
@@ -34,7 +35,7 @@ class _FileExplorerMeta(type(QWidget), ABCMeta):
     pass
 
 
-class FileExplorer(QWidget, IBaseToolPlugin, metaclass=_FileExplorerMeta):
+class FileExplorer(QWidget, IToolPlugin, metaclass=_FileExplorerMeta):
     """Self-contained file explorer tool widget.
 
     Displays a root directory tree and exposes all user interactions
@@ -53,11 +54,11 @@ class FileExplorer(QWidget, IBaseToolPlugin, metaclass=_FileExplorerMeta):
     """
 
     name: ClassVar[str] = "File Explorer"
+    category: ClassVar[ToolCategory] = ToolCategory.BASE
     description: ClassVar[str] = "Browse and manage the working directory for VI postprocessing."
     icon_path: ClassVar[str] = ""
     version: ClassVar[str] = "1.0.0"
     logger_name: ClassVar[str] = "vi_toolbox.tools.file_explorer"
-    # category inherits BASE default from IBaseToolPlugin
     allow_multiple_instances: ClassVar[bool] = False
     closable: ClassVar[bool] = True
 

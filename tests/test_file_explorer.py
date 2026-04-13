@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 from app.core.config import ConfigManager
-from app.plugin.base import IBaseToolPlugin
+from app.plugin.base import IToolPlugin
 from app.plugin.categories import ToolCategory
 from app.tools.base.file_explorer.explorer import FileExplorer
 from PySide6.QtWidgets import QMessageBox, QWidget
@@ -46,7 +46,7 @@ def reset_class_state() -> None:
 
 
 class TestFileExplorerClassAttributes:
-    """Verify IBaseToolPlugin contract and FileExplorer overrides."""
+    """Verify IToolPlugin contract and FileExplorer class attributes."""
 
     def test_name(self) -> None:
         """Name class attribute equals 'File Explorer'."""
@@ -69,13 +69,9 @@ class TestFileExplorerClassAttributes:
         """Closable is True (user can close the dock widget)."""
         assert FileExplorer.closable is True
 
-    def test_auto_open_on_startup(self) -> None:
-        """auto_open_on_startup is True (inherits IBaseToolPlugin default)."""
-        assert FileExplorer.auto_open_on_startup is True
-
-    def test_is_ibasetooplplugin_subclass(self) -> None:
-        """FileExplorer is a subclass of IBaseToolPlugin."""
-        assert issubclass(FileExplorer, IBaseToolPlugin)
+    def test_is_itooplplugin_subclass(self) -> None:
+        """FileExplorer is a subclass of IToolPlugin."""
+        assert issubclass(FileExplorer, IToolPlugin)
 
 
 # ---------------------------------------------------------------------------

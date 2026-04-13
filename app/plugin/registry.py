@@ -3,10 +3,11 @@
 All tool classes are imported and registered here once — there is no
 runtime plugin discovery.  To add a new tool:
 
-1. Implement :class:`~app.plugin.base.IToolPlugin` or
-   :class:`~app.plugin.base.IBaseToolPlugin`.
+1. Implement :class:`~app.plugin.base.IToolPlugin`.
 2. Add an import statement in the *Static registrations* section below.
 3. Call ``ToolRegistry.register(YourToolClass)``.
+   Pass ``auto_open=True`` if the tool should open on first startup / when
+   no saved session exists.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from app.tools.extensions.identification_tool.tool import SciBitTool
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
 
-    from app.plugin.base import IBaseToolPlugin, IToolPlugin
+    from app.plugin.base import IToolPlugin
 
 
 class ToolRegistry:
@@ -48,6 +49,8 @@ class ToolRegistry:
     # Monotonically increasing per-tool-name counter.  Never reset on close so
     # IDs remain unique for the lifetime of the process.
     _instance_counters: dict[str, int] = {}
+    # Tool names that should open automatically on first startup / no saved session.
+    _auto_open_tools: set[str] = set()
 
     @classmethod
     def allocate_instance_key(cls, name: str, allow_multiple: bool) -> tuple[str, int]:
@@ -76,13 +79,16 @@ class ToolRegistry:
         return f"{name} ({new_id})", new_id
 
     @classmethod
-    def register(cls, plugin_cls: type[IToolPlugin]) -> None:
+    def register(cls, plugin_cls: type[IToolPlugin], *, auto_open: bool = False) -> None:
         """Register a tool plugin class.
 
         Parameters
         ----------
         plugin_cls : type[IToolPlugin]
             The tool plugin class to register.
+        auto_open : bool
+            If ``True``, the tool is opened automatically on first startup or
+            when no saved session exists.  Default: ``False``.
 
         Raises
         ------
@@ -94,6 +100,8 @@ class ToolRegistry:
         if tool_name in cls._registered_tools:
             raise ValueError(f"Tool '{tool_name}' is already registered.")
         cls._registered_tools[tool_name] = plugin_cls
+        if auto_open:
+            cls._auto_open_tools.add(tool_name)
 
     def get_tool(self, name: str) -> type[IToolPlugin]:
         """Return the registered tool class for *name*.
@@ -142,17 +150,28 @@ class ToolRegistry:
         """
         return sorted({t.category for t in self._registered_tools.values()}, key=lambda c: c.value)
 
-    def get_base_tools(self) -> list[type[IBaseToolPlugin]]:
-        """Return all tools that subclass :class:`~app.plugin.base.IBaseToolPlugin`.
+    def get_all_tools(self) -> list[type[IToolPlugin]]:
+        """Return all registered tool classes.
 
         Returns
         -------
-        list[type[IBaseToolPlugin]]
-            Base tool classes.
+        list[type[IToolPlugin]]
+            Every registered tool class in registration order.
         """
-        from app.plugin.base import IBaseToolPlugin
+        return list(self._registered_tools.values())
 
-        return [t for t in self._registered_tools.values() if issubclass(t, IBaseToolPlugin)]
+    def get_auto_open_tools(self) -> list[type[IToolPlugin]]:
+        """Return all tools registered with ``auto_open=True``.
+
+        Returns
+        -------
+        list[type[IToolPlugin]]
+            Tool classes that should open on first startup / no saved session.
+        """
+        return [
+            t for name, t in self._registered_tools.items()
+            if name in self._auto_open_tools
+        ]
 
     def is_instantiated(self, name: str) -> bool:
         """Return whether *name* has an active widget instance.
@@ -201,13 +220,14 @@ class ToolRegistry:
         cls._registered_tools.clear()
         cls._instances.clear()
         cls._instance_counters.clear()
+        cls._auto_open_tools.clear()
 
 
 # ---------------------------------------------------------------------------
 # Static tool registrations (REQ-HS-015)
 # ---------------------------------------------------------------------------
 
-ToolRegistry.register(FileExplorer)
+ToolRegistry.register(FileExplorer, auto_open=True)
 ToolRegistry.register(ImageViewer)
-ToolRegistry.register(LogViewer)
+ToolRegistry.register(LogViewer, auto_open=True)
 ToolRegistry.register(SciBitTool)
