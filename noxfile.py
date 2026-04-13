@@ -17,6 +17,7 @@ Quick reference:
     nox -l           → List all available sessions
 """
 
+import shutil
 from pathlib import Path
 
 import nox
@@ -102,8 +103,27 @@ def build(session: nox.Session) -> None:
     # Step 2: Test
     session.notify("test")
 
-    # Step 3: Package as portable ZIP
-    # (Placeholder — will be replaced with PyInstaller or
-    #  shiv/zipapp packaging once the application is ready)
-    session.log("Packaging step: not yet implemented (placeholder)")
-    session.log("Future: create portable ZIP artifact (REQ-EC-020)")
+    # Step 3: Package as portable ZIP (REQ-EC-020)
+    session.install(".[dev]", "pyinstaller>=6.0")
+    session.run(
+        "pyinstaller",
+        "--onedir",
+        "--name", "vi-toolbox",
+        "--noconfirm",
+        "app/__main__.py",
+    )
+
+    # Copy bundled PaddleX models/fonts next to the executable so the app
+    # finds them via PADDLEX_HOME (set in app/__main__.py when frozen).
+    paddlex_src = Path.home() / ".paddlex"
+    paddlex_dst = Path("dist") / "vi-toolbox" / "paddlex_data"
+    if paddlex_src.exists():
+        shutil.copytree(paddlex_src, paddlex_dst, dirs_exist_ok=True)
+        session.log("Copied PaddleX data: %s -> %s", paddlex_src, paddlex_dst)
+    else:
+        session.warn("~/.paddlex not found — bundle will download models on first run")
+
+    # Zip the entire dist/vi-toolbox/ folder into dist/vi-toolbox.zip
+    zip_stem = Path("dist") / "vi-toolbox"
+    shutil.make_archive(str(zip_stem), "zip", "dist", "vi-toolbox")
+    session.log("Artifact created: %s", zip_stem.with_suffix(".zip"))

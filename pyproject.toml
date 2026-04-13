@@ -19,6 +19,7 @@ dev = [
     "pytest>=8.0",
     "pytest-qt>=4.4",      # Qt widget testing helpers for pytest
     "ruff>=0.5",           # Linter + formatter (replaces flake8, black, isort)
+    "pyinstaller>=6.0",    # Packaging into portable distribution (REQ-EC-020)
 ]
 
 # Entry point: allows "python -m app" to launch the application (REQ-EC-013)
