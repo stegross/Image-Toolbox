@@ -9,11 +9,13 @@ Available sessions (run via: nox -s <session>):
     nox -s lint      → Check code style and quality (no changes)
     nox -s format    → Auto-format code in place
     nox -s test      → Run the pytest test suite
+    nox -s lock      → Regenerate requirements*.txt lockfiles via pip-compile
     nox -s build     → Run uic + lint + test + package (REQ-EC-012)
 
 Quick reference:
     nox              → Runs the default sessions (lint + test)
     nox -s build     → Full build pipeline
+    nox -s lock      → Update lockfiles after changing pyproject.toml
     nox -l           → List all available sessions
 """
 
@@ -71,6 +73,38 @@ def format(session: nox.Session) -> None:
 
 
 @nox.session(python=PYTHON)
+def lock(session: nox.Session) -> None:
+    """Regenerate pinned lockfiles from pyproject.toml via pip-compile.
+
+    Run this whenever pyproject.toml dependencies change.  The generated
+    files should be committed so every developer and CI job installs
+    identical package versions.
+
+    Output files:
+        requirements.txt      — core runtime deps (for end-user installs)
+        requirements-dev.txt  — runtime + dev + all OCR extras (for developers)
+    """
+    session.install("pip-tools>=7.0")
+    # Core runtime lockfile
+    session.run(
+        "pip-compile",
+        "--output-file=requirements.txt",
+        "--strip-extras",
+        "pyproject.toml",
+    )
+    # Full developer lockfile (dev tools + all OCR backends)
+    session.run(
+        "pip-compile",
+        "--extra=dev",
+        "--extra=ocr",
+        "--output-file=requirements-dev.txt",
+        "--strip-extras",
+        "pyproject.toml",
+    )
+    session.log("Lockfiles updated: requirements.txt, requirements-dev.txt")
+
+
+@nox.session(python=PYTHON)
 def test(session: nox.Session) -> None:
     """Run the test suite with pytest.
 
@@ -110,6 +144,14 @@ def build(session: nox.Session) -> None:
         "--onedir",
         "--name", "vi-toolbox",
         "--noconfirm",
+        # Include Qt Designer .ui files (not auto-detected by PyInstaller)
+        "--add-data", "app/shell/ui/main_window.ui;app/shell/ui",
+        "--add-data", "app/tools/identification_tool/tool.ui;app/tools/identification_tool",
+        # OCR engine modules are loaded dynamically via importlib.import_module
+        # in factory.py — PyInstaller cannot detect them via static analysis.
+        "--hidden-import", "app.tools.identification_tool.ocr.paddleocr_engine",
+        "--hidden-import", "app.tools.identification_tool.ocr.easyocr_engine",
+        "--hidden-import", "app.tools.identification_tool.ocr.tesseract",
         "app/__main__.py",
     )
 
