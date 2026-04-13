@@ -1,11 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_data_files
+
+datas = [('app/shell/ui/main_window.ui', 'app/shell/ui'), ('app/tools/identification_tool/tool.ui', 'app/tools/identification_tool')]
+datas += collect_data_files('paddleocr')
+datas += collect_data_files('paddlex')
 
 
 a = Analysis(
     ['app\\__main__.py'],
     pathex=[],
     binaries=[],
-    datas=[('app/shell/ui/main_window.ui', 'app/shell/ui'), ('app/tools/identification_tool/tool.ui', 'app/tools/identification_tool')],
+    datas=datas,
     hiddenimports=['app.tools.identification_tool.ocr.paddleocr_engine', 'app.tools.identification_tool.ocr.easyocr_engine', 'app.tools.identification_tool.ocr.tesseract'],
     hookspath=[],
     hooksconfig={},

@@ -138,7 +138,7 @@ def build(session: nox.Session) -> None:
     session.notify("test")
 
     # Step 3: Package as portable ZIP (REQ-EC-020)
-    session.install(".[dev]", "pyinstaller>=6.0")
+    session.install(".[dev,ocr-paddle]", "pyinstaller>=6.0")
     session.run(
         "pyinstaller",
         "--onedir",
@@ -152,6 +152,11 @@ def build(session: nox.Session) -> None:
         "--hidden-import", "app.tools.identification_tool.ocr.paddleocr_engine",
         "--hidden-import", "app.tools.identification_tool.ocr.easyocr_engine",
         "--hidden-import", "app.tools.identification_tool.ocr.tesseract",
+        # paddleocr and paddlex ship YAML pipeline configs as package data.
+        # PyInstaller only bundles .py files by default — collect-data includes
+        # all non-Python files (configs, assets) from these packages.
+        "--collect-data", "paddleocr",
+        "--collect-data", "paddlex",
         "app/__main__.py",
     )
 
