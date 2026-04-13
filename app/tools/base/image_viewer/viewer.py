@@ -57,7 +57,12 @@ _THUMB_ROW_HEIGHT = 56
 
 _CONFIG_KEY_COLUMNS = "image_list_columns"
 _CONFIG_KEY_LIST_VISIBLE = "image_list_visible"
+_CONFIG_KEY_LAST_FOLDER = "last_folder"
 _DEFAULT_COLUMNS: list[str] = ["Thumbnail", "Name", "Date Modified"]
+
+# Instance config keys (stored in image_viewer_instances.json)
+_INST_KEY_PATH = "path"
+_INST_KEY_PATH_TYPE = "path_type"  # "file" | "folder"
 
 
 # ---------------------------------------------------------------------------
@@ -526,7 +531,7 @@ class ImageViewer(QWidget, IToolPlugin, metaclass=_ImageViewerMeta):
         return self
 
     def _assign_instance_id(self, instance_id: int) -> None:
-        """Set up a per-instance logger so multiple viewers are distinguishable.
+        """Set up a per-instance logger and restore the previously open path.
 
         Parameters
         ----------
@@ -536,6 +541,13 @@ class ImageViewer(QWidget, IToolPlugin, metaclass=_ImageViewerMeta):
         """
         super()._assign_instance_id(instance_id)
         self._logger = logging.getLogger(f"{self.logger_name}.{instance_id}")
+
+        inst = self._config_manager.get_instance_config(self.name, instance_id)
+        path_str = inst.get(_INST_KEY_PATH, "")
+        if path_str:
+            path = Path(path_str)
+            if path.exists():
+                self.open_from_path(path)
 
     def accepts_path(self, path: Path) -> bool:
         """Return ``True`` for image files and directories.
@@ -567,6 +579,44 @@ class ImageViewer(QWidget, IToolPlugin, metaclass=_ImageViewerMeta):
             self._load_single(path)
         elif path.is_dir():
             self._load_folder(path)
+        else:
+            return
+        self._save_instance_config()
+
+    def on_close(self) -> None:
+        """Remove this instance's config entry so it is not restored next session."""
+        self._config_manager.remove_instance_config(self.name, self._instance_id)
+
+    def _save_instance_config(self) -> None:
+        """Persist the current path to the instance config and update last_folder."""
+        if self._instance_id == 0:
+            # Instance ID not yet assigned — skip (called during session restore
+            # before MainWindow has had a chance to call _assign_instance_id).
+            return
+
+        # Determine what is currently open
+        if len(self._images) == 1 and self._images[0].parent != self._folder:
+            # Single-file mode: the file itself was opened directly
+            open_path = self._images[0]
+            path_type = "file"
+        elif self._folder is not None:
+            open_path = self._folder
+            path_type = "folder"
+        else:
+            return
+
+        self._config_manager.set_instance_config(
+            self.name,
+            self._instance_id,
+            {_INST_KEY_PATH: str(open_path), _INST_KEY_PATH_TYPE: path_type},
+        )
+
+        # Update shared last_folder regardless of file/folder mode
+        folder = self._folder
+        if folder is not None:
+            cfg = self._config_manager.get_tool_config(self.name)
+            cfg[_CONFIG_KEY_LAST_FOLDER] = str(folder)
+            self._config_manager.set_tool_config(self.name, cfg)
 
     # ------------------------------------------------------------------
     # UI setup
@@ -726,6 +776,9 @@ class ImageViewer(QWidget, IToolPlugin, metaclass=_ImageViewerMeta):
             self._show_current()
 
     def _on_browse(self) -> None:
+        cfg = self._config_manager.get_tool_config(self.name)
+        start = cfg.get(_CONFIG_KEY_LAST_FOLDER, str(self._folder or ""))
+
         menu = QMenu(self)
         act_file = menu.addAction("Open File…")
         act_folder = menu.addAction("Open Folder…")
@@ -735,14 +788,12 @@ class ImageViewer(QWidget, IToolPlugin, metaclass=_ImageViewerMeta):
         if action is act_file:
             exts = " ".join(f"*{e}" for e in sorted(_SUPPORTED_EXTENSIONS))
             path_str, _ = QFileDialog.getOpenFileName(
-                self, "Open Image", str(self._folder or ""), f"Images ({exts})"
+                self, "Open Image", start, f"Images ({exts})"
             )
             if path_str:
-                self._load_single(Path(path_str))
+                self.open_from_path(Path(path_str))
         elif action is act_folder:
-            folder_str = QFileDialog.getExistingDirectory(
-                self, "Open Folder", str(self._folder or "")
-            )
+            folder_str = QFileDialog.getExistingDirectory(self, "Open Folder", start)
             if folder_str:
                 self.open_from_path(Path(folder_str))
 

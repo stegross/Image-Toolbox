@@ -218,6 +218,7 @@ class MainWindow(QMainWindow):
         """
         _logger.info("Shutdown initiated.")
         self._config_manager.save_all()
+        self._config_manager.save_all_instances()
         self._layout_persistence.save_open_tools(list(self._open_instance_names.values()))
         self._layout_persistence.save_geometry(self.saveGeometry())
         self.save_layout()
