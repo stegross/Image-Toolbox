@@ -85,27 +85,38 @@ class PipelineResult:
 # ---------------------------------------------------------------------------
 
 
-def rename_to_identifier(path: Path, identifier: str) -> Path | None:
-    """Rename *path* to ``{identifier}_{original_name}``.
+def copy_as_identifier(path: Path, identifier: str) -> Path | None:
+    """Save a copy of *path* named ``{identifier}_{original_stem}.ext``.
 
-    Appends a numeric suffix on conflict.  Returns the new path on success,
-    ``None`` on failure.
+    JPEG originals (``".jpg"`` / ``".jpeg"``) are saved as JPEG at default
+    quality.  All other formats are saved as PNG with quality 90.  The
+    original file is never modified.  Returns the copy's path on success,
+    ``None`` on failure.  A numeric suffix is appended to resolve conflicts.
     """
     import logging
     _log = logging.getLogger("vi_toolbox.tools.scibit.pipeline")
-    new_name = f"{identifier}_{path.name}"
-    candidate = path.parent / new_name
+
+    is_jpeg = path.suffix.lower() in {".jpg", ".jpeg"}
+    fmt, quality = ("JPEG", -1) if is_jpeg else ("PNG", 90)
+    ext = path.suffix.lower() if is_jpeg else ".png"
+
+    candidate = path.parent / f"{identifier}_{path.stem}{ext}"
     counter = 1
-    while candidate.exists() and candidate != path:
-        candidate = path.parent / f"{identifier}_{counter}_{path.name}"
+    while candidate.exists():
+        candidate = path.parent / f"{identifier}_{counter}_{path.stem}{ext}"
         counter += 1
-    try:
-        path.rename(candidate)
-        _log.info("Renamed: %s -> %s", path.name, candidate.name)
-        return candidate
-    except OSError as exc:
-        _log.error("Rename failed: %s -> %s: %s", path.name, candidate.name, exc)
+
+    img = QImage(str(path))
+    if img.isNull():
+        _log.error("Cannot load image for copy: %s", path.name)
         return None
+
+    if img.save(str(candidate), fmt, quality):
+        _log.info("Saved copy: %s -> %s", path.name, candidate.name)
+        return candidate
+
+    _log.error("Failed to save copy: %s -> %s", path.name, candidate.name)
+    return None
 
 
 # ---------------------------------------------------------------------------

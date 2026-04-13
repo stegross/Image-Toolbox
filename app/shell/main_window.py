@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QMainWindow, QWidget
+from PySide6.QtWidgets import QMainWindow, QMessageBox, QWidget
 from PySide6QtAds import CDockManager
 
 from app.core.config import ConfigManager
@@ -162,8 +162,10 @@ class MainWindow(QMainWindow):
             self._open_instance_names.pop(instance_key, None)
             _logger.info("Tool closed: %s", instance_key)
 
+        can_close_fn = getattr(tool_instance, "can_close", None)
         self._docking_manager.add_tool_widget(
-            instance_key, widget, closable=closable, on_close=_on_tool_closed
+            instance_key, widget, closable=closable, on_close=_on_tool_closed,
+            can_close=can_close_fn if callable(can_close_fn) else None,
         )
         self._tool_registry.set_instance(instance_key, widget)
         if hasattr(widget, "open_tool_with_path_requested"):
@@ -209,13 +211,19 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
-        """Handle window close: save configs and layout, then quit.
+        """Handle window close: check tools for unconfirmed work, then quit.
 
         Parameters
         ----------
         event : QCloseEvent
             The close event from Qt.
         """
+        for widget in self._docking_manager.get_all_widgets():
+            can_close = getattr(widget, "can_close", None)
+            if callable(can_close) and not can_close():
+                event.ignore()
+                return
+
         _logger.info("Shutdown initiated.")
         self._config_manager.save_all()
         self._config_manager.save_all_instances()

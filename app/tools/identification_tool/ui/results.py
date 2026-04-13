@@ -28,7 +28,7 @@ from app.tools.identification_tool.pipeline.base import (
     CalibrationData,
     PipelineResult,
     ResultStatus,
-    rename_to_identifier,
+    copy_as_identifier,
 )
 
 _logger = logging.getLogger("vi_toolbox.tools.scibit.results")
@@ -342,7 +342,7 @@ class ResultsWidget(QWidget):
 
     def _on_rename_applied(self, original_path: Path, new_name: str) -> None:
         path_str = str(original_path)
-        new_path = rename_to_identifier(original_path, new_name)
+        new_path = copy_as_identifier(original_path, new_name)
         if new_path is None:
             return
         if path_str in self._result_map:
@@ -379,6 +379,14 @@ class ResultsWidget(QWidget):
     # ------------------------------------------------------------------
     # Summary
     # ------------------------------------------------------------------
+
+    @property
+    def has_unconfirmed(self) -> bool:
+        """True if any result is still FAILED or PENDING (not yet confirmed)."""
+        return any(
+            r.status in (ResultStatus.FAILED, ResultStatus.PENDING)
+            for r, _ in self._result_map.values()
+        )
 
     def _update_summary(self) -> None:
         total = len(self._result_map)

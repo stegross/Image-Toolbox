@@ -22,7 +22,7 @@ from app.tools.identification_tool.pipeline.base import (
     crop_qimage,
     invert_qimage,
     load_qimage,
-    rename_to_identifier,
+    copy_as_identifier,
     rotate_qimage,
 )
 
@@ -125,7 +125,7 @@ class _SequentialBatchWorker2(QRunnable):
                 if accepted and self._rename_preview:
                     status = ResultStatus.PENDING
                 elif accepted:
-                    new_path = rename_to_identifier(path, ocr_result.text.strip())
+                    new_path = copy_as_identifier(path, ocr_result.text.strip())
                     status = ResultStatus.ACCEPTED if new_path else ResultStatus.FAILED
                 else:
                     status = ResultStatus.FAILED

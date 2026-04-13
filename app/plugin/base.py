@@ -97,6 +97,17 @@ class IToolPlugin(ABC):
     def on_deactivate(self) -> None:
         """Notify the tool that its dock widget has lost focus."""
 
+    def can_close(self) -> bool:
+        """Return ``True`` if the tool may be closed right now.
+
+        Called by the shell before closing the tool's dock widget (user-initiated
+        close) and before closing the whole application.  Override to show a
+        confirmation dialog when there is unsaved / unconfirmed work.
+
+        The default implementation always returns ``True``.
+        """
+        return True
+
     def on_close(self) -> None:
         """Notify the tool that its dock widget is about to close."""
 

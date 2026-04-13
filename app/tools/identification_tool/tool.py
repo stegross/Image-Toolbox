@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -109,6 +110,8 @@ class SciBitTool(QWidget, IToolPlugin, metaclass=_SciBitMeta):
         self._calib_data: CalibrationData | None = None
         self._logger = _logger
 
+        self._results_widget: ResultsWidget | None = None
+
         self._setup_ui()
         self._populate_combos()
         self._load_config()
@@ -130,6 +133,17 @@ class SciBitTool(QWidget, IToolPlugin, metaclass=_SciBitMeta):
 
     def open_from_path(self, path: Path) -> None:
         if path.is_dir():
+            if self._has_unconfirmed_work():
+                reply = QMessageBox.question(
+                    self,
+                    "Open New Folder",
+                    "Not all images have been confirmed yet.\n"
+                    "Open a new folder and lose unconfirmed results?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Cancel,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    return
             self._set_folder(path)
 
     # ------------------------------------------------------------------
@@ -241,6 +255,26 @@ class SciBitTool(QWidget, IToolPlugin, metaclass=_SciBitMeta):
     # IToolPlugin lifecycle
     # ------------------------------------------------------------------
 
+    def _has_unconfirmed_work(self) -> bool:
+        """True when processing is active or results still have unconfirmed entries."""
+        if self._running:
+            return True
+        if self._results_widget is not None and self._results_widget.has_unconfirmed:
+            return True
+        return False
+
+    def can_close(self) -> bool:
+        if not self._has_unconfirmed_work():
+            return True
+        reply = QMessageBox.question(
+            self,
+            "Unconfirmed Results",
+            "Not all images have been confirmed yet.\nClose anyway and lose unconfirmed results?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return reply == QMessageBox.StandardButton.Yes
+
     def on_close(self) -> None:
         self._save_config()
         if self._current_pipeline:
@@ -261,6 +295,10 @@ class SciBitTool(QWidget, IToolPlugin, metaclass=_SciBitMeta):
         )
         self._start_btn.setEnabled(bool(self._images))
         self._logger.debug("Folder set: %s (%d images)", folder, len(self._images))
+        # Reset the process area so the previous results view is never shown
+        # for a different folder.
+        self._results_widget = None
+        self._show_placeholder()
         if save:
             self._save_config()
 
@@ -269,6 +307,17 @@ class SciBitTool(QWidget, IToolPlugin, metaclass=_SciBitMeta):
     # ------------------------------------------------------------------
 
     def _on_select_folder(self) -> None:
+        if self._has_unconfirmed_work():
+            reply = QMessageBox.question(
+                self,
+                "Select New Folder",
+                "Not all images have been confirmed yet.\n"
+                "Select a new folder and lose unconfirmed results?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
         start = str(self._folder) if self._folder else ""
         folder_str = QFileDialog.getExistingDirectory(self, "Select Image Folder", start)
         if folder_str:
@@ -276,8 +325,30 @@ class SciBitTool(QWidget, IToolPlugin, metaclass=_SciBitMeta):
 
     def _on_start_stop(self) -> None:
         if self._running:
+            if self._has_unconfirmed_work():
+                reply = QMessageBox.question(
+                    self,
+                    "Stop Processing",
+                    "Batch is still running or results have not been fully confirmed.\n"
+                    "Stop anyway and lose unconfirmed results?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Cancel,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    return
             self._stop()
         else:
+            if self._has_unconfirmed_work():
+                reply = QMessageBox.question(
+                    self,
+                    "Start New Run",
+                    "Not all images from the previous run have been confirmed.\n"
+                    "Start a new run and lose unconfirmed results?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Cancel,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    return
             self._start()
 
     def _on_config_toggled(self, checked: bool) -> None:
@@ -326,6 +397,7 @@ class SciBitTool(QWidget, IToolPlugin, metaclass=_SciBitMeta):
 
     def _stop(self) -> None:
         self._running = False
+        self._results_widget = None
         self._start_btn.setText("Start")
         self._start_btn.setEnabled(bool(self._images))
         self._set_control_bar_enabled(True)
@@ -363,6 +435,7 @@ class SciBitTool(QWidget, IToolPlugin, metaclass=_SciBitMeta):
             pipeline=self._current_pipeline,
             parent=self._process_area_frame,
         )
+        self._results_widget = widget
         widget.batch_complete.connect(self._on_batch_complete)
         self._process_area_frame.layout().addWidget(widget)
 
