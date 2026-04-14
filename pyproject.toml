@@ -19,6 +19,7 @@ dependencies = [
 # are available in the tool's OCR engine dropdown.
 ocr-paddle = [
     "paddleocr>=3.0",      # PaddlePaddle OCR engine (recommended, used in research)
+    "paddlepaddle>=3.0",   # Inference backend — not declared by paddleocr as required
 ]
 ocr-easy = [
     "easyocr>=1.7",        # EasyOCR engine (torch-based, broad language support)

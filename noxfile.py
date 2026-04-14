@@ -5,18 +5,20 @@ virtual environments for each task. This ensures reproducible results
 regardless of what is installed in the developer's main venv.
 
 Available sessions (run via: nox -s <session>):
-    nox -s uic       → Compile Qt Designer .ui files to Python
-    nox -s lint      → Check code style and quality (no changes)
-    nox -s format    → Auto-format code in place
-    nox -s test      → Run the pytest test suite
-    nox -s lock      → Regenerate requirements*.txt lockfiles via pip-compile
-    nox -s build     → Run uic + lint + test + package (REQ-EC-012)
+    nox -s uic          → Compile Qt Designer .ui files to Python
+    nox -s lint         → Check code style and quality (no changes)
+    nox -s format       → Auto-format code in place
+    nox -s test         → Run the pytest test suite
+    nox -s lock         → Regenerate requirements*.txt lockfiles via pip-compile
+    nox -s build-local  → lint + test + package using active .venv (local use)
+    nox -s build-ci     → lint + test + package using isolated venv (CI use)
 
 Quick reference:
-    nox              → Runs the default sessions (lint + test)
-    nox -s build     → Full build pipeline
-    nox -s lock      → Update lockfiles after changing pyproject.toml
-    nox -l           → List all available sessions
+    nox                  → Runs the default sessions (lint + test)
+    nox -s build-local   → Build and package from your local .venv
+    nox -s build-ci      → Reproducible build for GitLab CI
+    nox -s lock          → Update lockfiles after changing pyproject.toml
+    nox -l               → List all available sessions
 """
 
 import shutil
@@ -116,29 +118,13 @@ def test(session: nox.Session) -> None:
     session.run("pytest", *session.posargs)
 
 
-@nox.session(python=PYTHON)
-def build(session: nox.Session) -> None:
-    """Full build pipeline: lint → test → package.
+def _package(session: nox.Session, site_packages: Path) -> None:
+    """Run PyInstaller and assemble the portable ZIP artifact.
 
-    This is the canonical local build command (REQ-EC-012):
-        nox -s build
-
-    The pipeline mirrors what the GitLab CI runs (REQ-EC-023):
-        1. Lint & format check (quality gate, REQ-EC-019)
-        2. Unit tests (REQ-EC-018)
-        3. Create distributable ZIP artifact (REQ-EC-020)
+    Shared implementation used by both ``build-local`` and ``build-ci``.
+    The only difference between the two sessions is where site-packages
+    lives, which affects the paddle copy step.
     """
-    # Step 1: Compile .ui files
-    session.notify("uic")
-
-    # Step 2: Lint
-    session.notify("lint")
-
-    # Step 2: Test
-    session.notify("test")
-
-    # Step 3: Package as portable ZIP (REQ-EC-020)
-    session.install(".[dev,ocr-paddle]", "pyinstaller>=6.0")
     session.run(
         "pyinstaller",
         "--onedir",
@@ -152,13 +138,39 @@ def build(session: nox.Session) -> None:
         "--hidden-import", "app.tools.identification_tool.ocr.paddleocr_engine",
         "--hidden-import", "app.tools.identification_tool.ocr.easyocr_engine",
         "--hidden-import", "app.tools.identification_tool.ocr.tesseract",
-        # paddleocr and paddlex ship YAML pipeline configs as package data.
-        # PyInstaller only bundles .py files by default — collect-data includes
-        # all non-Python files (configs, assets) from these packages.
-        "--collect-data", "paddleocr",
-        "--collect-data", "paddlex",
+        # paddleocr/paddlex use dynamic imports and ship YAML configs and other
+        # data files — --collect-all bundles Python modules, data, and binaries.
+        "--collect-all", "paddleocr",
+        "--collect-all", "paddlex",
         "app/__main__.py",
     )
+
+    # paddle (paddlepaddle) is a native package that PyInstaller cannot collect
+    # automatically on Windows — it skips it with "not a package" warning.
+    # Copy the entire paddle directory from site-packages into _internal/ where
+    # the bundled Python looks for packages.
+    internal_dir = Path("dist") / "vi-toolbox" / "_internal"
+    paddle_src = site_packages / "paddle"
+    paddle_dst = internal_dir / "paddle"
+    if paddle_src.exists():
+        shutil.copytree(paddle_src, paddle_dst, dirs_exist_ok=True)
+        session.log("Manually copied paddle: %s -> %s", paddle_src, paddle_dst)
+    else:
+        session.warn("paddle package not found: %s", paddle_src)
+
+    # paddleocr/paddlex use importlib.metadata at runtime to verify that their
+    # dependencies are installed (e.g. the ocr-core extra check in deps.py).
+    # PyInstaller only copies a handful of .dist-info directories — the rest are
+    # missing, so is_dep_available() returns False and DependencyError is raised.
+    # Copy every .dist-info from site-packages into _internal/ so that all
+    # importlib.metadata calls resolve correctly in the frozen bundle.
+    copied = 0
+    for dist_info in site_packages.glob("*.dist-info"):
+        dst = internal_dir / dist_info.name
+        if not dst.exists():
+            shutil.copytree(dist_info, dst)
+            copied += 1
+    session.log("Copied %d missing .dist-info directories into _internal/", copied)
 
     # Copy bundled PaddleX models/fonts next to the executable so the app
     # finds them via PADDLEX_HOME (set in app/__main__.py when frozen).
@@ -174,3 +186,50 @@ def build(session: nox.Session) -> None:
     zip_stem = Path("dist") / "vi-toolbox"
     shutil.make_archive(str(zip_stem), "zip", "dist", "vi-toolbox")
     session.log("Artifact created: %s", zip_stem.with_suffix(".zip"))
+
+
+@nox.session(name="build-local", venv_backend="none")
+def build_local(session: nox.Session) -> None:
+    """Full build pipeline using the active .venv (local distribution).
+
+    Uses whatever is installed in the currently active virtual environment,
+    so activate your .venv before running:
+        .venv\\Scripts\\activate
+        nox -s build-local
+
+    Pipeline (REQ-EC-012):
+        1. Compile .ui files
+        2. Lint & format check (REQ-EC-019)
+        3. Unit tests (REQ-EC-018)
+        4. Create distributable ZIP artifact (REQ-EC-020)
+    """
+    session.notify("uic")
+    session.notify("lint")
+    session.notify("test")
+
+    import sysconfig
+    site_packages = Path(sysconfig.get_path("purelib"))
+    _package(session, site_packages)
+
+
+@nox.session(name="build-ci", python=PYTHON)
+def build_ci(session: nox.Session) -> None:
+    """Full build pipeline using an isolated venv (CI distribution).
+
+    Installs all dependencies from scratch into an isolated environment
+    for a reproducible, machine-independent build.  Intended for use in
+    GitLab CI (REQ-EC-023) once a CI runner is configured.
+
+    Pipeline (REQ-EC-012):
+        1. Compile .ui files
+        2. Lint & format check (REQ-EC-019)
+        3. Unit tests (REQ-EC-018)
+        4. Create distributable ZIP artifact (REQ-EC-020)
+    """
+    session.notify("uic")
+    session.notify("lint")
+    session.notify("test")
+
+    session.install(".[dev,ocr-paddle]", "pyinstaller>=6.0")
+    site_packages = Path(session.virtualenv.location) / "Lib" / "site-packages"
+    _package(session, site_packages)
