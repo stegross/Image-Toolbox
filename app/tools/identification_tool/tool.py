@@ -115,6 +115,7 @@ class SciBitTool(QWidget, IToolPlugin, metaclass=_SciBitMeta):
         self._setup_ui()
         self._populate_combos()
         self._load_config()
+        # self._apply_prototype_locks()
 
     # ------------------------------------------------------------------
     # IToolPlugin interface
@@ -217,6 +218,45 @@ class SciBitTool(QWidget, IToolPlugin, metaclass=_SciBitMeta):
         self._ocr_framework_combo.clear()
         for name in OCR_FRAMEWORKS:
             self._ocr_framework_combo.addItem(name)
+
+    # ------------------------------------------------------------------
+    # Prototype locks — disable controls that are not yet exposed
+    # ------------------------------------------------------------------
+
+    def _apply_prototype_locks(self) -> None:
+        """Lock UI controls to fixed prototype values without removing any code.
+
+        Remove or rename this method when the full configuration is ready to
+        be exposed to end users.
+        """
+        # Identifier Type — single static option
+        if self._chip_type_combo:
+            self._chip_type_combo.clear()
+            self._chip_type_combo.addItem("Default (accept any)")
+            self._chip_type_combo.setDisabled(True)
+
+        # Recognition Pipeline — locked to Pipeline 2
+        if self._pipeline_combo:
+            self._pipeline_combo.setCurrentIndex(1)
+            self._pipeline_combo.setDisabled(True)
+
+        # Detection & OCR frameworks — locked to PaddleOCR
+        if self._detection_framework_combo:
+            idx = self._detection_framework_combo.findText("PaddleOCR")
+            if idx >= 0:
+                self._detection_framework_combo.setCurrentIndex(idx)
+            self._detection_framework_combo.setDisabled(True)
+
+        if self._ocr_framework_combo:
+            idx = self._ocr_framework_combo.findText("PaddleOCR")
+            if idx >= 0:
+                self._ocr_framework_combo.setCurrentIndex(idx)
+            self._ocr_framework_combo.setDisabled(True)
+
+        # Manual Confirmation — always on
+        if self._rename_preview_check:
+            self._rename_preview_check.setChecked(True)
+            self._rename_preview_check.setDisabled(True)
 
     # ------------------------------------------------------------------
     # Config persistence
@@ -401,6 +441,7 @@ class SciBitTool(QWidget, IToolPlugin, metaclass=_SciBitMeta):
         self._start_btn.setText("Start")
         self._start_btn.setEnabled(bool(self._images))
         self._set_control_bar_enabled(True)
+        # self._apply_prototype_locks()
         if self._current_pipeline:
             self._current_pipeline.stop()
             self._current_pipeline = None
@@ -450,6 +491,7 @@ class SciBitTool(QWidget, IToolPlugin, metaclass=_SciBitMeta):
         self._start_btn.setText("Start")
         self._start_btn.setEnabled(bool(self._images))
         self._set_control_bar_enabled(True)
+        # self._apply_prototype_locks()
         t_now = time.monotonic()
         n = len(self._images)
         if self._t_calib_done is not None and n > 0:
