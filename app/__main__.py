@@ -14,8 +14,11 @@ from pathlib import Path
 if getattr(sys, "frozen", False):
     _bundle_dir = Path(sys.executable).parent
 
-    # Redirect PaddleX model lookups to the paddlex_data/ folder copied at build time.
-    os.environ.setdefault("PADDLEX_HOME", str(_bundle_dir / "paddlex_data"))
+    # Redirect PaddleX to the paddlex_data/ folder bundled alongside the exe.
+    # PADDLE_PDX_CACHE_HOME controls where paddlex reads models and writes
+    # temp/lock/cache files (see paddlex/utils/cache.py). Setting this prevents
+    # any downloads and keeps all paddlex activity out of the user's home dir.
+    os.environ.setdefault("PADDLE_PDX_CACHE_HOME", str(_bundle_dir / "paddlex_data"))
 
     # paddle (paddlepaddle) ships native DLLs in paddle/libs/.  Register the
     # directory so Windows finds them when paddle loads its C extensions.
