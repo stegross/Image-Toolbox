@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from typing import Any
 
 from PySide6.QtCore import QByteArray
 from PySide6.QtWidgets import QWidget
@@ -35,6 +36,7 @@ class DockingManager:
         widget: QWidget,
         closable: bool = True,
         on_close: Callable[[], None] | None = None,
+        can_close: Callable[[], bool] | None = None,
     ) -> CDockWidget:
         """Add a tool widget to the central dock area.
 
@@ -50,6 +52,11 @@ class DockingManager:
             Optional callback invoked when the dock widget is closed via the
             Qt ADS UI.  Use this to clean up registry state and call the
             tool's :meth:`~app.plugin.base.IToolPlugin.on_close` hook.
+        can_close : Callable[[], bool] | None
+            Optional guard called when the user requests to close this dock.
+            If it returns ``False`` the close is cancelled.  Falls back to
+            simple close-signal handling when ``CustomCloseHandling`` is not
+            available in the installed Qt ADS version.
 
         Returns
         -------
@@ -61,6 +68,17 @@ class DockingManager:
 
         if not closable:
             dock.setFeature(CDockWidget.DockWidgetFeature.DockWidgetClosable, False)
+        elif can_close is not None:
+            try:
+                dock.setFeature(CDockWidget.DockWidgetFeature.CustomCloseHandling, True)
+
+                def _on_close_requested() -> None:
+                    if can_close():
+                        dock.closeDockWidget()
+
+                dock.closeRequested.connect(_on_close_requested)
+            except AttributeError:
+                _logger.debug("CustomCloseHandling not available — falling back to closed signal")
 
         def _on_dock_closed() -> None:
             self._dock_widgets.pop(name, None)
@@ -73,6 +91,15 @@ class DockingManager:
         self._dock_widgets[name] = dock
         _logger.debug("Added dock widget: %s (closable=%s)", name, closable)
         return dock
+
+    def get_all_widgets(self) -> list[QWidget]:
+        """Return the embedded content widget of every currently open dock."""
+        widgets = []
+        for dock in self._dock_widgets.values():
+            w = dock.widget()
+            if w is not None:
+                widgets.append(w)
+        return widgets
 
     def remove_tool_widget(self, name: str) -> None:
         """Remove and destroy a docked tool widget.

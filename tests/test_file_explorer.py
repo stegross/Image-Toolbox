@@ -7,9 +7,9 @@ from unittest.mock import patch
 
 import pytest
 from app.core.config import ConfigManager
-from app.plugin.base import IBaseToolPlugin
+from app.plugin.base import IToolPlugin
 from app.plugin.categories import ToolCategory
-from app.tools.base.file_explorer.explorer import FileExplorer
+from app.tools.file_explorer.explorer import FileExplorer
 from PySide6.QtWidgets import QMessageBox, QWidget
 from pytestqt.qtbot import QtBot
 
@@ -46,7 +46,7 @@ def reset_class_state() -> None:
 
 
 class TestFileExplorerClassAttributes:
-    """Verify IBaseToolPlugin contract and FileExplorer overrides."""
+    """Verify IToolPlugin contract and FileExplorer class attributes."""
 
     def test_name(self) -> None:
         """Name class attribute equals 'File Explorer'."""
@@ -69,13 +69,9 @@ class TestFileExplorerClassAttributes:
         """Closable is True (user can close the dock widget)."""
         assert FileExplorer.closable is True
 
-    def test_auto_open_on_startup(self) -> None:
-        """auto_open_on_startup is True (inherits IBaseToolPlugin default)."""
-        assert FileExplorer.auto_open_on_startup is True
-
-    def test_is_ibasetooplplugin_subclass(self) -> None:
-        """FileExplorer is a subclass of IBaseToolPlugin."""
-        assert issubclass(FileExplorer, IBaseToolPlugin)
+    def test_is_itooplplugin_subclass(self) -> None:
+        """FileExplorer is a subclass of IToolPlugin."""
+        assert issubclass(FileExplorer, IToolPlugin)
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +157,7 @@ class TestFileExplorerActions:
     def test_action_new_file_creates_file(self, explorer: FileExplorer, tmp_path: Path) -> None:
         """New File action creates a file with the given name in the folder."""
         with patch(
-            "app.tools.base.file_explorer.explorer.QInputDialog.getText",
+            "app.tools.file_explorer.explorer.QInputDialog.getText",
             return_value=("test.txt", True),
         ):
             explorer._action_new_file(tmp_path)
@@ -175,7 +171,7 @@ class TestFileExplorerActions:
         target_dir = tmp_path / "target"
         target_dir.mkdir()
         with patch(
-            "app.tools.base.file_explorer.explorer.QInputDialog.getText",
+            "app.tools.file_explorer.explorer.QInputDialog.getText",
             return_value=("", False),
         ):
             explorer._action_new_file(target_dir)
@@ -187,7 +183,7 @@ class TestFileExplorerActions:
     ) -> None:
         """New Folder action creates a subdirectory with the given name."""
         with patch(
-            "app.tools.base.file_explorer.explorer.QInputDialog.getText",
+            "app.tools.file_explorer.explorer.QInputDialog.getText",
             return_value=("subdir", True),
         ):
             explorer._action_new_folder(tmp_path)
@@ -202,7 +198,7 @@ class TestFileExplorerActions:
         target.touch()
 
         with patch(
-            "app.tools.base.file_explorer.explorer.QMessageBox.question",
+            "app.tools.file_explorer.explorer.QMessageBox.question",
             return_value=QMessageBox.StandardButton.Yes,
         ):
             explorer._action_delete(target)
@@ -217,7 +213,7 @@ class TestFileExplorerActions:
         target.touch()
 
         with patch(
-            "app.tools.base.file_explorer.explorer.QMessageBox.question",
+            "app.tools.file_explorer.explorer.QMessageBox.question",
             return_value=QMessageBox.StandardButton.No,
         ):
             explorer._action_delete(target)
@@ -231,7 +227,7 @@ class TestFileExplorerActions:
         (folder / "child.txt").touch()
 
         with patch(
-            "app.tools.base.file_explorer.explorer.QMessageBox.question",
+            "app.tools.file_explorer.explorer.QMessageBox.question",
             return_value=QMessageBox.StandardButton.Yes,
         ):
             explorer._action_delete(folder)
@@ -246,7 +242,7 @@ class TestFileExplorerActions:
     def test_action_change_root_updates_root(self, explorer: FileExplorer, tmp_path: Path) -> None:
         """Change Root Directory sets current_root_dir to the chosen path."""
         with patch(
-            "app.tools.base.file_explorer.explorer.QFileDialog.getExistingDirectory",
+            "app.tools.file_explorer.explorer.QFileDialog.getExistingDirectory",
             return_value=str(tmp_path),
         ):
             explorer._action_change_root()
@@ -256,7 +252,7 @@ class TestFileExplorerActions:
     def test_action_change_root_cancelled_no_change(self, explorer: FileExplorer) -> None:
         """Cancelling the Change Root dialog leaves current_root_dir unchanged."""
         with patch(
-            "app.tools.base.file_explorer.explorer.QFileDialog.getExistingDirectory",
+            "app.tools.file_explorer.explorer.QFileDialog.getExistingDirectory",
             return_value="",
         ):
             explorer._action_change_root()

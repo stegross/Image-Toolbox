@@ -23,7 +23,8 @@ import app.shell as _shell_pkg
 import app.tools as _tools_pkg
 from app.core.config import ConfigManager
 from app.core.logging import APP_LOGGER_NAME
-from app.plugin.base import IBaseToolPlugin
+from app.plugin.base import IToolPlugin
+from app.plugin.categories import ToolCategory
 
 _logger = logging.getLogger("vi_toolbox.tools.log_viewer")
 
@@ -106,7 +107,7 @@ class _LogViewerMeta(type(QWidget), ABCMeta):
 # ---------------------------------------------------------------------------
 
 
-class LogViewer(QWidget, IBaseToolPlugin, metaclass=_LogViewerMeta):
+class LogViewer(QWidget, IToolPlugin, metaclass=_LogViewerMeta):
     """Read-only log output viewer with level and subsystem filters.
 
     Captures every record emitted to the ``vi_toolbox`` logger (the same
@@ -124,6 +125,7 @@ class LogViewer(QWidget, IBaseToolPlugin, metaclass=_LogViewerMeta):
     """
 
     name: ClassVar[str] = "Log Viewer"
+    category: ClassVar[ToolCategory] = ToolCategory.BASE
     description: ClassVar[str] = (
         "Displays application log output with level and subsystem filtering."
     )
@@ -237,7 +239,7 @@ class LogViewer(QWidget, IBaseToolPlugin, metaclass=_LogViewerMeta):
         from app.plugin.registry import ToolRegistry  # lazy import — avoids circular dep
 
         result: dict[str, str | None] = dict(_FIXED_SUBSYSTEMS)
-        for tool_cls in ToolRegistry().get_base_tools():
+        for tool_cls in ToolRegistry().get_all_tools():
             if tool_cls.logger_name:
                 result[tool_cls.name] = tool_cls.logger_name
         return result

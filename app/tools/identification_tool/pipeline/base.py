@@ -7,10 +7,10 @@ from abc import abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRect, QRectF, QRunnable, Signal
-from PySide6.QtGui import QImage
+from PySide6.QtCore import QObject, QRect, QRectF, QRunnable, Qt, Signal
+from PySide6.QtGui import QImage, QTransform
 
-from app.tools.extensions.identification_tool.ocr.base import AbstractOcrEngine
+from app.tools.identification_tool.ocr.base import AbstractOcrEngine
 
 
 # ---------------------------------------------------------------------------
@@ -44,9 +44,13 @@ class CalibrationData:
 
     The single shared field is ``reference_identifier``: the user-confirmed
     OCR text from the first image, common to every pipeline.
+    ``rotation_degrees`` stores the clockwise rotation chosen in the
+    universal rotation step and is applied to every batch image.
     """
 
     reference_identifier: str = ""
+    rotation_degrees: float = 0.0
+    invert_colors: bool = False
 
 
 class ResultStatus(enum.Enum):
@@ -81,27 +85,38 @@ class PipelineResult:
 # ---------------------------------------------------------------------------
 
 
-def rename_to_identifier(path: Path, identifier: str) -> Path | None:
-    """Rename *path* to ``{identifier}_{original_name}``.
+def copy_as_identifier(path: Path, identifier: str) -> Path | None:
+    """Save a copy of *path* named ``{identifier}_{original_stem}.ext``.
 
-    Appends a numeric suffix on conflict.  Returns the new path on success,
-    ``None`` on failure.
+    JPEG originals (``".jpg"`` / ``".jpeg"``) are saved as JPEG at default
+    quality.  All other formats are saved as PNG with quality 90.  The
+    original file is never modified.  Returns the copy's path on success,
+    ``None`` on failure.  A numeric suffix is appended to resolve conflicts.
     """
     import logging
     _log = logging.getLogger("vi_toolbox.tools.scibit.pipeline")
-    new_name = f"{identifier}_{path.name}"
-    candidate = path.parent / new_name
+
+    is_jpeg = path.suffix.lower() in {".jpg", ".jpeg"}
+    fmt, quality = ("JPEG", -1) if is_jpeg else ("PNG", 90)
+    ext = path.suffix.lower() if is_jpeg else ".png"
+
+    candidate = path.parent / f"{identifier}_{path.stem}{ext}"
     counter = 1
-    while candidate.exists() and candidate != path:
-        candidate = path.parent / f"{identifier}_{counter}_{path.name}"
+    while candidate.exists():
+        candidate = path.parent / f"{identifier}_{counter}_{path.stem}{ext}"
         counter += 1
-    try:
-        path.rename(candidate)
-        _log.info("Renamed: %s -> %s", path.name, candidate.name)
-        return candidate
-    except OSError as exc:
-        _log.error("Rename failed: %s -> %s: %s", path.name, candidate.name, exc)
+
+    img = QImage(str(path))
+    if img.isNull():
+        _log.error("Cannot load image for copy: %s", path.name)
         return None
+
+    if img.save(str(candidate), fmt, quality):
+        _log.info("Saved copy: %s -> %s", path.name, candidate.name)
+        return candidate
+
+    _log.error("Failed to save copy: %s -> %s", path.name, candidate.name)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +149,21 @@ def load_qimage(path: Path) -> QImage | None:
     return img.convertToFormat(QImage.Format.Format_Grayscale8)
 
 
+def rotate_qimage(img: QImage, degrees: float) -> QImage:
+    """Return *img* rotated clockwise by *degrees*. Returns *img* unchanged if 0."""
+    if degrees == 0:
+        return img
+    transform = QTransform().rotate(degrees)
+    return img.transformed(transform, Qt.TransformationMode.SmoothTransformation)
+
+
+def invert_qimage(img: QImage) -> QImage:
+    """Return a color-inverted copy of *img*."""
+    copy = img.copy()
+    copy.invertPixels()
+    return copy
+
+
 def crop_qimage(img: QImage, bbox: BoundingBox) -> QImage:
     """Return a copy of *img* cropped to *bbox*, clamped to image bounds."""
     x = max(0, int(bbox.x))
@@ -152,6 +182,8 @@ class OcrWorker(QRunnable):
         identifier_bbox: BoundingBox,
         recognition_engine: AbstractOcrEngine,
         signals: WorkerSignals,
+        rotation_degrees: float = 0.0,
+        invert_colors: bool = False,
     ) -> None:
         super().__init__()
         self.setAutoDelete(True)
@@ -159,6 +191,8 @@ class OcrWorker(QRunnable):
         self._bbox = identifier_bbox
         self._recognition_engine = recognition_engine
         self._signals = signals
+        self._rotation_degrees = rotation_degrees
+        self._invert_colors = invert_colors
 
     def run(self) -> None:  # noqa: N802
         try:
@@ -166,6 +200,9 @@ class OcrWorker(QRunnable):
             if img is None:
                 self._signals.error.emit(f"Cannot read image: {self._path.name}")
                 return
+            img = rotate_qimage(img, self._rotation_degrees)
+            if self._invert_colors:
+                img = invert_qimage(img)
             crop = crop_qimage(img, self._bbox)
             result = self._recognition_engine.recognize_text(crop)
             self._signals.ocr_result.emit(result.text, result.confidence)
@@ -250,6 +287,20 @@ class AbstractPipeline(QObject):
         self._detection_engine = detection_engine
         self._recognition_engine = recognition_engine
         self._stopped = False
+        self._rotation_degrees: float = 0.0
+        self._invert_colors: bool = False
+
+    def set_rotation(self, degrees: float) -> None:
+        """Store the clockwise rotation chosen in the universal rotation step."""
+        self._rotation_degrees = degrees
+
+    def set_invert_colors(self, invert: bool) -> None:
+        """Store whether image colors should be inverted before processing."""
+        self._invert_colors = invert
+
+    @property
+    def invert_colors(self) -> bool:
+        return self._invert_colors
 
     # ------------------------------------------------------------------
     # Calibration interface

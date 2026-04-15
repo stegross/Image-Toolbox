@@ -6,8 +6,8 @@ import logging
 
 from PySide6.QtGui import QImage
 
-from app.tools.extensions.identification_tool.ocr._convert import qimage_to_numpy_gray
-from app.tools.extensions.identification_tool.ocr.base import (
+from app.tools.identification_tool.ocr._convert import qimage_to_numpy_gray
+from app.tools.identification_tool.ocr.base import (
     AbstractOcrEngine,
     DetectedRegion,
     OcrResult,

@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QKeySequence, QPen, QPixmap
+from PySide6.QtGui import QColor, QKeySequence, QPen, QPixmap, QTransform
 from PySide6.QtWidgets import (
     QGraphicsRectItem,
     QGraphicsView,
@@ -17,12 +17,13 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRubberBand,
     QSizePolicy,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
 
 from app.tools._shared.image_widgets import ImageArea, PanZoomView
-from app.tools.extensions.identification_tool.pipeline.base import (
+from app.tools.identification_tool.pipeline.base import (
     AbstractCalibrationController,
     CalibrationData,
 )
@@ -139,6 +140,9 @@ class _StepIndicator(QWidget):
     def set_step(self, current: int, total: int, description: str) -> None:
         self._label.setText(f"Step {current}/{total}: {description}")
 
+    def set_message(self, text: str) -> None:
+        self._label.setText(text)
+
 
 # ---------------------------------------------------------------------------
 # Button bar
@@ -201,6 +205,60 @@ class _OcrConfirmPanel(QWidget):
 
 
 # ---------------------------------------------------------------------------
+# Rotation panel
+# ---------------------------------------------------------------------------
+
+
+class _RotationPanel(QWidget):
+    """Slider-based rotation control shown as the first calibration step."""
+
+    rotation_changed = Signal(int)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 4, 8, 4)
+        outer.setSpacing(2)
+
+        # Row 1: label + slider + value display
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("Rotation:"))
+        self._slider = QSlider(Qt.Orientation.Horizontal)
+        self._slider.setRange(-180, 180)
+        self._slider.setValue(0)
+        self._slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._slider.setTickInterval(90)
+        self._slider.setSingleStep(1)
+        self._slider.setPageStep(10)
+        row1.addWidget(self._slider, stretch=1)
+        self._value_label = QLabel("0°")
+        self._value_label.setMinimumWidth(44)
+        self._value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        row1.addWidget(self._value_label)
+        outer.addLayout(row1)
+
+        # Row 2: tick labels at -180°, -90°, 0°, 90°, 180°
+        row2 = QHBoxLayout()
+        row2.setContentsMargins(0, 0, 0, 0)
+        row2.setSpacing(0)
+        for text in ("-180°", "-90°", "0°", "90°", "180°"):
+            lbl = QLabel(text)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setStyleSheet("color: #888; font-size: 10px;")
+            row2.addWidget(lbl, stretch=1)
+        outer.addLayout(row2)
+
+        self._slider.valueChanged.connect(self._on_value_changed)
+
+    def _on_value_changed(self, value: int) -> None:
+        self._value_label.setText(f"{value:+d}°" if value != 0 else "0°")
+        self.rotation_changed.emit(value)
+
+    def degrees(self) -> int:
+        return self._slider.value()
+
+
+# ---------------------------------------------------------------------------
 # CalibrationWidget — dumb UI surface
 # ---------------------------------------------------------------------------
 
@@ -208,10 +266,9 @@ class _OcrConfirmPanel(QWidget):
 class CalibrationWidget(QWidget):
     """Dumb UI surface for the calibration phase.
 
-    All logic lives in the controller returned by
-    ``pipeline.create_calibration_controller()``.  This widget exposes a
-    simple API that controllers call, and a set of signals that controllers
-    listen to.
+    Always starts with a universal rotation step (slider, live preview).
+    After the user confirms the rotation, the pipeline-specific controller
+    takes over.
 
     Controller-facing API
     ---------------------
@@ -256,12 +313,18 @@ class CalibrationWidget(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        self._pipeline = pipeline
+        self._image_paths = image_paths
+        self._rotation_degrees: float = 0.0
+        self._original_pixmap: QPixmap | None = None
+
         self._setup_ui()
 
         self._controller: AbstractCalibrationController = pipeline.create_calibration_controller()
-        self._controller.calibration_complete.connect(self.calibration_complete)
+        self._controller.calibration_complete.connect(self._on_controller_complete)
         self._controller.calibration_cancelled.connect(self.calibration_cancelled)
-        self._controller.start(self, image_paths)
+
+        self._start_rotation_step()
 
     # ------------------------------------------------------------------
     # UI setup
@@ -281,6 +344,9 @@ class CalibrationWidget(QWidget):
         self._image_area.scene().selectionChanged.connect(self.scene_selection_changed)
         layout.addWidget(self._image_area, stretch=1)
 
+        self._rotation_panel = _RotationPanel(self)
+        layout.addWidget(self._rotation_panel)
+
         self._ocr_panel = _OcrConfirmPanel(self)
         self._ocr_panel.confirmed.connect(self.ocr_confirmed)
         layout.addWidget(self._ocr_panel)
@@ -289,13 +355,68 @@ class CalibrationWidget(QWidget):
         layout.addWidget(self._button_bar)
 
     # ------------------------------------------------------------------
+    # Rotation step
+    # ------------------------------------------------------------------
+
+    def _start_rotation_step(self) -> None:
+        if self._image_paths:
+            path = self._image_paths[0]
+            self._original_pixmap = QPixmap(str(path))
+            if not self._original_pixmap.isNull():
+                self._image_area.set_pixmap(
+                    self._apply_display_transforms(self._original_pixmap, 0)
+                )
+                self._image_area.set_filename_text(path.name)
+
+        self._step_indicator.set_message("Rotation — set the orientation applied to all images")
+        self._rotation_panel.show()
+        self._rotation_panel.rotation_changed.connect(self._on_rotation_preview)
+
+        self._button_bar.set_buttons([("confirm_rotation", "Confirm Rotation")])
+        btn = self._button_bar.button("confirm_rotation")
+        if btn:
+            btn.clicked.connect(self._on_rotation_confirmed)
+
+    def _apply_display_transforms(self, pixmap: QPixmap, degrees: float | None = None) -> QPixmap:
+        """Return *pixmap* with rotation and color-inversion applied for display."""
+        angle = degrees if degrees is not None else self._rotation_degrees
+        if angle != 0:
+            pixmap = pixmap.transformed(
+                QTransform().rotate(angle), Qt.TransformationMode.SmoothTransformation
+            )
+        if self._pipeline.invert_colors:
+            img = pixmap.toImage()
+            img.invertPixels()
+            pixmap = QPixmap.fromImage(img)
+        return pixmap
+
+    def _on_rotation_preview(self, degrees: int) -> None:
+        if self._original_pixmap is None or self._original_pixmap.isNull():
+            return
+        self._image_area.set_pixmap(
+            self._apply_display_transforms(self._original_pixmap, degrees)
+        )
+
+    def _on_rotation_confirmed(self) -> None:
+        self._rotation_degrees = float(self._rotation_panel.degrees())
+        self._rotation_panel.rotation_changed.disconnect(self._on_rotation_preview)
+        self._rotation_panel.hide()
+        self._pipeline.set_rotation(self._rotation_degrees)
+        self._controller.start(self, self._image_paths)
+
+    def _on_controller_complete(self, data: CalibrationData) -> None:
+        data.rotation_degrees = self._rotation_degrees
+        data.invert_colors = self._pipeline.invert_colors
+        self.calibration_complete.emit(data)
+
+    # ------------------------------------------------------------------
     # Controller-facing API
     # ------------------------------------------------------------------
 
     def load_image(self, path: Path) -> None:
         pixmap = QPixmap(str(path))
         if not pixmap.isNull():
-            self._image_area.set_pixmap(pixmap)
+            self._image_area.set_pixmap(self._apply_display_transforms(pixmap))
             self._image_area.set_filename_text(path.name)
 
     def set_step(self, current: int, total: int, description: str) -> None:

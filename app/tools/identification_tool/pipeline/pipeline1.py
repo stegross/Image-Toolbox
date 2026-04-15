@@ -9,8 +9,8 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QRectF, QRunnable, QThreadPool, Signal
 from PySide6.QtGui import QColor
 
-from app.tools.extensions.identification_tool.ocr.base import AbstractOcrEngine
-from app.tools.extensions.identification_tool.pipeline.base import (
+from app.tools.identification_tool.ocr.base import AbstractOcrEngine
+from app.tools.identification_tool.pipeline.base import (
     AbstractCalibrationController,
     AbstractPipeline,
     BoundingBox,
@@ -19,9 +19,11 @@ from app.tools.extensions.identification_tool.pipeline.base import (
     PipelineResult,
     ResultStatus,
     WorkerSignals,
+    copy_as_identifier,
     crop_qimage,
+    invert_qimage,
     load_qimage,
-    rename_to_identifier,
+    rotate_qimage,
 )
 
 _logger = logging.getLogger("vi_toolbox.tools.scibit.pipeline1")
@@ -57,11 +59,19 @@ class Pipeline1CalibrationData(CalibrationData):
 
 
 class _ChipDetectionWorker(QRunnable):
-    def __init__(self, image_path: Path, signals: WorkerSignals) -> None:
+    def __init__(
+        self,
+        image_path: Path,
+        signals: WorkerSignals,
+        rotation_degrees: float = 0.0,
+        invert_colors: bool = False,
+    ) -> None:
         super().__init__()
         self.setAutoDelete(True)
         self._path = image_path
         self._signals = signals
+        self._rotation_degrees = rotation_degrees
+        self._invert_colors = invert_colors
 
     def run(self) -> None:  # noqa: N802
         try:
@@ -70,6 +80,19 @@ class _ChipDetectionWorker(QRunnable):
             if img is None:
                 self._signals.chip_failed.emit(f"Could not read image: {self._path.name}")
                 return
+            if self._rotation_degrees != 0:
+                h, w = img.shape[:2]
+                center = (w / 2.0, h / 2.0)
+                M = cv2.getRotationMatrix2D(center, -self._rotation_degrees, 1.0)
+                cos_a = abs(M[0, 0])
+                sin_a = abs(M[0, 1])
+                new_w = int(h * sin_a + w * cos_a)
+                new_h = int(h * cos_a + w * sin_a)
+                M[0, 2] += new_w / 2.0 - center[0]
+                M[1, 2] += new_h / 2.0 - center[1]
+                img = cv2.warpAffine(img, M, (new_w, new_h))
+            if self._invert_colors:
+                img = cv2.bitwise_not(img)
             _, thresh = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             h, w = img.shape
@@ -107,6 +130,8 @@ class _TextDetectionWorker(QRunnable):
         chip_bbox: BoundingBox,
         detection_engine: AbstractOcrEngine,
         signals: WorkerSignals,
+        rotation_degrees: float = 0.0,
+        invert_colors: bool = False,
     ) -> None:
         super().__init__()
         self.setAutoDelete(True)
@@ -114,6 +139,8 @@ class _TextDetectionWorker(QRunnable):
         self._chip_bbox = chip_bbox
         self._detection_engine = detection_engine
         self._signals = signals
+        self._rotation_degrees = rotation_degrees
+        self._invert_colors = invert_colors
 
     def run(self) -> None:  # noqa: N802
         try:
@@ -121,6 +148,9 @@ class _TextDetectionWorker(QRunnable):
             if img is None:
                 self._signals.error.emit(f"Cannot read image: {self._path.name}")
                 return
+            img = rotate_qimage(img, self._rotation_degrees)
+            if self._invert_colors:
+                img = invert_qimage(img)
             bb = self._chip_bbox
             chip_crop = crop_qimage(img, bb)
             regions = self._detection_engine.detect_text_regions(chip_crop)
@@ -157,6 +187,10 @@ class _SequentialBatchWorker(QRunnable):
         for path in self._images:
             try:
                 img = load_qimage(path)
+                if img is not None:
+                    img = rotate_qimage(img, self._calib.rotation_degrees)
+                    if self._calib.invert_colors:
+                        img = invert_qimage(img)
                 if img is None or chip_bbox is None or id_norm is None:
                     self._signals.batch_image_result.emit(PipelineResult(
                         original_path=path, recognized_text=None,
@@ -180,7 +214,7 @@ class _SequentialBatchWorker(QRunnable):
                 if accepted and self._rename_preview:
                     status = ResultStatus.PENDING
                 elif accepted:
-                    new_path = rename_to_identifier(path, ocr_result.text.strip())
+                    new_path = copy_as_identifier(path, ocr_result.text.strip())
                     status = ResultStatus.ACCEPTED if new_path else ResultStatus.FAILED
                 else:
                     status = ResultStatus.FAILED
@@ -252,7 +286,7 @@ class Pipeline1(AbstractPipeline):
         self._run_chip_detection(image)
 
     def _run_chip_detection(self, image: Path) -> None:
-        worker = _ChipDetectionWorker(image, self._signals)
+        worker = _ChipDetectionWorker(image, self._signals, self._rotation_degrees, self._invert_colors)
         QThreadPool.globalInstance().start(worker)
 
     def _on_chip_detected(self, polygon: list[tuple[float, float]], confidence: float) -> None:
@@ -289,7 +323,9 @@ class Pipeline1(AbstractPipeline):
         if self._chip_bbox is None:
             return
         worker = _TextDetectionWorker(
-            self._ref_image, self._chip_bbox, self._detection_engine, self._signals
+            self._ref_image, self._chip_bbox, self._detection_engine, self._signals,
+            rotation_degrees=self._rotation_degrees,
+            invert_colors=self._invert_colors,
         )
         QThreadPool.globalInstance().start(worker)
 
@@ -308,7 +344,9 @@ class Pipeline1(AbstractPipeline):
         if self._ref_image is None or self._identifier_bbox is None:
             return
         worker = OcrWorker(
-            self._ref_image, self._identifier_bbox, self._recognition_engine, self._signals
+            self._ref_image, self._identifier_bbox, self._recognition_engine, self._signals,
+            rotation_degrees=self._rotation_degrees,
+            invert_colors=self._invert_colors,
         )
         QThreadPool.globalInstance().start(worker)
 

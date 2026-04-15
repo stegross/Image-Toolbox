@@ -110,7 +110,7 @@
          <bool>true</bool>
         </property>
         <property name="checked">
-         <bool>true</bool>
+         <bool>false</bool>
         </property>
         <layout class="QFormLayout" name="config_form_layout">
          <property name="labelAlignment">
@@ -246,6 +246,21 @@
           <widget class="QCheckBox" name="rename_preview_check">
            <property name="text">
             <string>Confirm each rename manually</string>
+           </property>
+          </widget>
+         </item>
+
+         <item row="6" column="0">
+          <widget class="QLabel" name="invert_color_label">
+           <property name="text">
+            <string>Color:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="6" column="1">
+          <widget class="QCheckBox" name="invert_color_check">
+           <property name="text">
+            <string>Invert colors (use for bright text on dark background)</string>
            </property>
           </widget>
          </item>

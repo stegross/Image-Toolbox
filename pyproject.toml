@@ -9,16 +9,36 @@ license = {text = "LGPL-3.0-or-later"}
 dependencies = [
     "PySide6>=6.7,<7",
     "PySide6-QtAds>=4.3,<5",
+    "numpy>=1.26",
 ]
 
 # Optional dependency groups — installed only when needed
 [project.optional-dependencies]
+# OCR engine backends — install the one(s) you intend to use.
+# Each engine is lazy-loaded at runtime, so only the installed backends
+# are available in the tool's OCR engine dropdown.
+ocr-paddle = [
+    "paddleocr>=3.0",      # PaddlePaddle OCR engine (recommended, used in research)
+    "paddlepaddle>=3.0",   # Inference backend — not declared by paddleocr as required
+]
+ocr-easy = [
+    "easyocr>=1.7",        # EasyOCR engine (torch-based, broad language support)
+]
+ocr-tesseract = [
+    "pytesseract>=0.3",    # Tesseract wrapper (requires Tesseract binary on PATH)
+]
+# Convenience: install all OCR backends at once
+ocr = [
+    "vi-toolbox[ocr-paddle,ocr-easy,ocr-tesseract]",
+]
 # Development tools: linting, formatting, testing, build automation
 dev = [
     "nox>=2024.4",
     "pytest>=8.0",
     "pytest-qt>=4.4",      # Qt widget testing helpers for pytest
     "ruff>=0.5",           # Linter + formatter (replaces flake8, black, isort)
+    "pyinstaller>=6.0",    # Packaging into portable distribution (REQ-EC-020)
+    "pip-tools>=7.0",      # Lockfile generation (pip-compile)
 ]
 
 # Entry point: allows "python -m app" to launch the application (REQ-EC-013)

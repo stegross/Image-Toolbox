@@ -19,8 +19,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QRectF, QRunnable, QThreadPool
 
-from app.tools.extensions.identification_tool.ocr.base import AbstractOcrEngine
-from app.tools.extensions.identification_tool.pipeline.base import (  # noqa: F401
+from app.tools.identification_tool.ocr.base import AbstractOcrEngine
+from app.tools.identification_tool.pipeline.base import (  # noqa: F401
     AbstractCalibrationController,
     AbstractPipeline,
     BoundingBox,

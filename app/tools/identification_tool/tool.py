@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -25,19 +26,19 @@ from PySide6.QtWidgets import (
 )
 
 from app.core.config import ConfigManager
-from app.plugin.base import IBaseToolPlugin
+from app.plugin.base import IToolPlugin
 from app.plugin.categories import ToolCategory
-from app.tools.extensions.identification_tool.config import (
+from app.tools.identification_tool.config import (
     DETECTION_FRAMEWORKS,
     OCR_FRAMEWORKS,
     load_identifier_configs,
 )
-from app.tools.extensions.identification_tool.ocr.factory import create_engine
-from app.tools.extensions.identification_tool.pipeline.base import AbstractPipeline, CalibrationData
-from app.tools.extensions.identification_tool.pipeline.pipeline1 import Pipeline1
-from app.tools.extensions.identification_tool.pipeline.pipeline2 import Pipeline2
-from app.tools.extensions.identification_tool.ui.calibration import CalibrationWidget
-from app.tools.extensions.identification_tool.ui.results import ResultsWidget
+from app.tools.identification_tool.ocr.factory import create_engine
+from app.tools.identification_tool.pipeline.base import AbstractPipeline, CalibrationData
+from app.tools.identification_tool.pipeline.pipeline1 import Pipeline1
+from app.tools.identification_tool.pipeline.pipeline2 import Pipeline2
+from app.tools.identification_tool.ui.calibration import CalibrationWidget
+from app.tools.identification_tool.ui.results import ResultsWidget
 
 _logger = logging.getLogger("vi_toolbox.tools.scibit")
 
@@ -51,6 +52,7 @@ _CFG_DETECTION = "detection_framework_index"
 _CFG_OCR = "ocr_framework_index"
 _CFG_MIN_CONF = "min_confidence"
 _CFG_RENAME_PREVIEW = "rename_preview"
+_CFG_INVERT_COLOR = "invert_color"
 _CFG_CONFIG_EXPANDED = "config_expanded"
 
 
@@ -68,7 +70,7 @@ class _SciBitMeta(type(QWidget), ABCMeta):
 # ---------------------------------------------------------------------------
 
 
-class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
+class SciBitTool(QWidget, IToolPlugin, metaclass=_SciBitMeta):
     """Single Chip Image Batch Identification Tool.
 
     Processes a folder of chip images, recognises the identifier printed on
@@ -89,7 +91,6 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
     icon_path: ClassVar[str] = ""
     version: ClassVar[str] = "1.0.0"
     logger_name: ClassVar[str] = "vi_toolbox.tools.scibit"
-    auto_open_on_startup: ClassVar[bool] = False
     allow_multiple_instances: ClassVar[bool] = False
     closable: ClassVar[bool] = True
     handles_folders: ClassVar[bool] = True
@@ -109,9 +110,12 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
         self._calib_data: CalibrationData | None = None
         self._logger = _logger
 
+        self._results_widget: ResultsWidget | None = None
+
         self._setup_ui()
         self._populate_combos()
         self._load_config()
+        # self._apply_prototype_locks()
 
     # ------------------------------------------------------------------
     # IToolPlugin interface
@@ -130,6 +134,17 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
 
     def open_from_path(self, path: Path) -> None:
         if path.is_dir():
+            if self._has_unconfirmed_work():
+                reply = QMessageBox.question(
+                    self,
+                    "Open New Folder",
+                    "Not all images have been confirmed yet.\n"
+                    "Open a new folder and lose unconfirmed results?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Cancel,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    return
             self._set_folder(path)
 
     # ------------------------------------------------------------------
@@ -169,6 +184,7 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
         self._ocr_framework_combo: QComboBox = self._form.findChild(QComboBox, "ocr_framework_combo")
         self._min_confidence_spin: QDoubleSpinBox = self._form.findChild(QDoubleSpinBox, "min_confidence_spin")
         self._rename_preview_check: QCheckBox = self._form.findChild(QCheckBox, "rename_preview_check")
+        self._invert_color_check: QCheckBox = self._form.findChild(QCheckBox, "invert_color_check")
         self._process_area_frame: QFrame = self._form.findChild(QFrame, "process_area_frame")
 
         # -- Connect control bar signals --
@@ -204,6 +220,45 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
             self._ocr_framework_combo.addItem(name)
 
     # ------------------------------------------------------------------
+    # Prototype locks — disable controls that are not yet exposed
+    # ------------------------------------------------------------------
+
+    def _apply_prototype_locks(self) -> None:
+        """Lock UI controls to fixed prototype values without removing any code.
+
+        Remove or rename this method when the full configuration is ready to
+        be exposed to end users.
+        """
+        # Identifier Type — single static option
+        if self._chip_type_combo:
+            self._chip_type_combo.clear()
+            self._chip_type_combo.addItem("Default (accept any)")
+            self._chip_type_combo.setDisabled(True)
+
+        # Recognition Pipeline — locked to Pipeline 2
+        if self._pipeline_combo:
+            self._pipeline_combo.setCurrentIndex(1)
+            self._pipeline_combo.setDisabled(True)
+
+        # Detection & OCR frameworks — locked to PaddleOCR
+        if self._detection_framework_combo:
+            idx = self._detection_framework_combo.findText("PaddleOCR")
+            if idx >= 0:
+                self._detection_framework_combo.setCurrentIndex(idx)
+            self._detection_framework_combo.setDisabled(True)
+
+        if self._ocr_framework_combo:
+            idx = self._ocr_framework_combo.findText("PaddleOCR")
+            if idx >= 0:
+                self._ocr_framework_combo.setCurrentIndex(idx)
+            self._ocr_framework_combo.setDisabled(True)
+
+        # Manual Confirmation — always on
+        if self._rename_preview_check:
+            self._rename_preview_check.setChecked(True)
+            self._rename_preview_check.setDisabled(True)
+
+    # ------------------------------------------------------------------
     # Config persistence
     # ------------------------------------------------------------------
 
@@ -219,6 +274,8 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
             self._ocr_framework_combo.setCurrentIndex(cfg.get(_CFG_OCR, 0))
             self._min_confidence_spin.setValue(cfg.get(_CFG_MIN_CONF, 0.75))
             self._rename_preview_check.setChecked(cfg.get(_CFG_RENAME_PREVIEW, False))
+            if self._invert_color_check:
+                self._invert_color_check.setChecked(cfg.get(_CFG_INVERT_COLOR, False))
 
     def _save_config(self) -> None:
         cfg = self._config_manager.get_tool_config(self.name)
@@ -230,12 +287,33 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
             cfg[_CFG_OCR] = self._ocr_framework_combo.currentIndex()
             cfg[_CFG_MIN_CONF] = self._min_confidence_spin.value()
             cfg[_CFG_RENAME_PREVIEW] = self._rename_preview_check.isChecked()
+            cfg[_CFG_INVERT_COLOR] = self._invert_color_check.isChecked() if self._invert_color_check else False
         self._config_manager.set_tool_config(self.name, cfg)
         self._config_manager.save(self.name)
 
     # ------------------------------------------------------------------
     # IToolPlugin lifecycle
     # ------------------------------------------------------------------
+
+    def _has_unconfirmed_work(self) -> bool:
+        """True when processing is active or results still have unconfirmed entries."""
+        if self._running:
+            return True
+        if self._results_widget is not None and self._results_widget.has_unconfirmed:
+            return True
+        return False
+
+    def can_close(self) -> bool:
+        if not self._has_unconfirmed_work():
+            return True
+        reply = QMessageBox.question(
+            self,
+            "Unconfirmed Results",
+            "Not all images have been confirmed yet.\nClose anyway and lose unconfirmed results?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return reply == QMessageBox.StandardButton.Yes
 
     def on_close(self) -> None:
         self._save_config()
@@ -257,6 +335,10 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
         )
         self._start_btn.setEnabled(bool(self._images))
         self._logger.debug("Folder set: %s (%d images)", folder, len(self._images))
+        # Reset the process area so the previous results view is never shown
+        # for a different folder.
+        self._results_widget = None
+        self._show_placeholder()
         if save:
             self._save_config()
 
@@ -265,6 +347,17 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
     # ------------------------------------------------------------------
 
     def _on_select_folder(self) -> None:
+        if self._has_unconfirmed_work():
+            reply = QMessageBox.question(
+                self,
+                "Select New Folder",
+                "Not all images have been confirmed yet.\n"
+                "Select a new folder and lose unconfirmed results?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
         start = str(self._folder) if self._folder else ""
         folder_str = QFileDialog.getExistingDirectory(self, "Select Image Folder", start)
         if folder_str:
@@ -272,8 +365,30 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
 
     def _on_start_stop(self) -> None:
         if self._running:
+            if self._has_unconfirmed_work():
+                reply = QMessageBox.question(
+                    self,
+                    "Stop Processing",
+                    "Batch is still running or results have not been fully confirmed.\n"
+                    "Stop anyway and lose unconfirmed results?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Cancel,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    return
             self._stop()
         else:
+            if self._has_unconfirmed_work():
+                reply = QMessageBox.question(
+                    self,
+                    "Start New Run",
+                    "Not all images from the previous run have been confirmed.\n"
+                    "Start a new run and lose unconfirmed results?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Cancel,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    return
             self._start()
 
     def _on_config_toggled(self, checked: bool) -> None:
@@ -311,6 +426,9 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
         else:
             self._current_pipeline = Pipeline2(detection_engine, recognition_engine, self)
 
+        invert_colors = self._invert_color_check.isChecked() if self._invert_color_check else False
+        self._current_pipeline.set_invert_colors(invert_colors)
+
         self._t_start = time.monotonic()
         self._t_calib_done: float | None = None
 
@@ -319,9 +437,11 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
 
     def _stop(self) -> None:
         self._running = False
+        self._results_widget = None
         self._start_btn.setText("Start")
         self._start_btn.setEnabled(bool(self._images))
         self._set_control_bar_enabled(True)
+        # self._apply_prototype_locks()
         if self._current_pipeline:
             self._current_pipeline.stop()
             self._current_pipeline = None
@@ -356,6 +476,7 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
             pipeline=self._current_pipeline,
             parent=self._process_area_frame,
         )
+        self._results_widget = widget
         widget.batch_complete.connect(self._on_batch_complete)
         self._process_area_frame.layout().addWidget(widget)
 
@@ -370,6 +491,7 @@ class SciBitTool(QWidget, IBaseToolPlugin, metaclass=_SciBitMeta):
         self._start_btn.setText("Start")
         self._start_btn.setEnabled(bool(self._images))
         self._set_control_bar_enabled(True)
+        # self._apply_prototype_locks()
         t_now = time.monotonic()
         n = len(self._images)
         if self._t_calib_done is not None and n > 0:

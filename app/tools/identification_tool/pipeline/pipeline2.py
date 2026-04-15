@@ -1,4 +1,4 @@
-"""Pipeline 2: ROI Selection with Tolerance Correction."""
+"""Pipeline 2: ROI Selection."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QRectF, QRunnable, QThreadPool, Signal
 from PySide6.QtGui import QColor
 
-from app.tools.extensions.identification_tool.ocr.base import AbstractOcrEngine
-from app.tools.extensions.identification_tool.pipeline.base import (
+from app.tools.identification_tool.ocr.base import AbstractOcrEngine
+from app.tools.identification_tool.pipeline.base import (
     AbstractCalibrationController,
     AbstractPipeline,
     BoundingBox,
@@ -20,13 +20,17 @@ from app.tools.extensions.identification_tool.pipeline.base import (
     ResultStatus,
     WorkerSignals,
     crop_qimage,
+    invert_qimage,
     load_qimage,
-    rename_to_identifier,
+    copy_as_identifier,
+    rotate_qimage,
 )
 
 _logger = logging.getLogger("vi_toolbox.tools.scibit.pipeline2")
 
-_TOLERANCE = 0.40
+# Fraction of ROI width/height added on each side during batch processing.
+# 0.25 → total region is 1.5× the user-drawn ROI in each dimension.
+_TOLERANCE = 0.25
 
 
 # ---------------------------------------------------------------------------
@@ -41,8 +45,8 @@ class Pipeline2CalibrationData(CalibrationData):
     Parameters
     ----------
     roi_bbox
-        Absolute pixel bounding box of the snapped identifier region in the
-        reference image.
+        Absolute pixel bounding box of the user-selected identifier region in
+        the reference image.
     reference_resolution
         ``(width, height)`` of the reference image, used to scale the ROI
         to images of different sizes.
@@ -57,51 +61,6 @@ class Pipeline2CalibrationData(CalibrationData):
 # ---------------------------------------------------------------------------
 
 
-class _RoiTextDetectionWorker(QRunnable):
-    """Detect text inside the user-selected ROI to snap to precise boundary."""
-
-    def __init__(
-        self,
-        image_path: Path,
-        roi_bbox: BoundingBox,
-        detection_engine: AbstractOcrEngine,
-        signals: WorkerSignals,
-    ) -> None:
-        super().__init__()
-        self.setAutoDelete(True)
-        self._path = image_path
-        self._roi = roi_bbox
-        self._detection_engine = detection_engine
-        self._signals = signals
-
-    def run(self) -> None:  # noqa: N802
-        try:
-            img = load_qimage(self._path)
-            if img is None:
-                self._signals.error.emit(f"Cannot read image: {self._path.name}")
-                return
-            crop = crop_qimage(img, self._roi)
-            regions = self._detection_engine.detect_text_regions(crop)
-            if regions:
-                roi_cx, roi_cy = self._roi.width / 2, self._roi.height / 2
-                best = min(
-                    regions,
-                    key=lambda r: (r.x + r.width / 2 - roi_cx) ** 2
-                    + (r.y + r.height / 2 - roi_cy) ** 2,
-                )
-                snapped = QRectF(
-                    self._roi.x + best.x,
-                    self._roi.y + best.y,
-                    best.width,
-                    best.height,
-                )
-            else:
-                snapped = self._roi.to_qrectf()
-            self._signals.text_regions_result.emit([snapped])
-        except Exception as exc:  # noqa: BLE001
-            self._signals.error.emit(str(exc))
-
-
 class _SequentialBatchWorker2(QRunnable):
     """Processes all batch images sequentially on a single background thread."""
 
@@ -110,7 +69,6 @@ class _SequentialBatchWorker2(QRunnable):
         images: list[Path],
         calib: Pipeline2CalibrationData,
         min_confidence: float,
-        detection_engine: AbstractOcrEngine,
         recognition_engine: AbstractOcrEngine,
         signals: WorkerSignals,
         rename_preview: bool = False,
@@ -120,7 +78,6 @@ class _SequentialBatchWorker2(QRunnable):
         self._images = images
         self._calib = calib
         self._min_confidence = min_confidence
-        self._detection_engine = detection_engine
         self._recognition_engine = recognition_engine
         self._signals = signals
         self._rename_preview = rename_preview
@@ -138,40 +95,26 @@ class _SequentialBatchWorker2(QRunnable):
                     ))
                     continue
 
+                # Rotate then invert so all coordinate math is in the transformed space,
+                # matching the rotated reference_resolution stored at calibration time.
+                img = rotate_qimage(img, self._calib.rotation_degrees)
+                if self._calib.invert_colors:
+                    img = invert_qimage(img)
                 w, h = img.width(), img.height()
                 ref_w, ref_h = ref_res
                 sx, sy = w / ref_w, h / ref_h
 
+                # Scale the user-selected ROI and expand by tolerance on each side.
                 tw = roi.width * sx * _TOLERANCE
                 th = roi.height * sy * _TOLERANCE
-                search = BoundingBox(
+
+                id_bbox = BoundingBox(
                     x=max(0, roi.x * sx - tw),
                     y=max(0, roi.y * sy - th),
                     width=min(w, roi.width * sx + 2 * tw),
                     height=min(h, roi.height * sy + 2 * th),
                 )
 
-                crop = crop_qimage(img, search)
-                regions = self._detection_engine.detect_text_regions(crop)
-
-                if not regions:
-                    self._signals.batch_image_result.emit(PipelineResult(
-                        original_path=path, recognized_text=None,
-                        confidence=0.0, status=ResultStatus.FAILED,
-                    ))
-                    continue
-
-                exp_cx = (roi.x * sx) - search.x + (roi.width * sx) / 2
-                exp_cy = (roi.y * sy) - search.y + (roi.height * sy) / 2
-                best = min(
-                    regions,
-                    key=lambda r: (r.x + r.width / 2 - exp_cx) ** 2
-                    + (r.y + r.height / 2 - exp_cy) ** 2,
-                )
-                id_bbox = BoundingBox(
-                    x=search.x + best.x, y=search.y + best.y,
-                    width=best.width, height=best.height,
-                )
                 id_crop = crop_qimage(img, id_bbox)
                 ocr_result = self._recognition_engine.recognize_text(id_crop)
                 accepted = (
@@ -182,7 +125,7 @@ class _SequentialBatchWorker2(QRunnable):
                 if accepted and self._rename_preview:
                     status = ResultStatus.PENDING
                 elif accepted:
-                    new_path = rename_to_identifier(path, ocr_result.text.strip())
+                    new_path = copy_as_identifier(path, ocr_result.text.strip())
                     status = ResultStatus.ACCEPTED if new_path else ResultStatus.FAILED
                 else:
                     status = ResultStatus.FAILED
@@ -208,11 +151,12 @@ class _SequentialBatchWorker2(QRunnable):
 
 
 class Pipeline2(AbstractPipeline):
-    """Pipeline 2: ROI Selection with Tolerance Correction.
+    """Pipeline 2: ROI Selection.
 
-    The user draws a rectangle on the first image; subsequent images are
-    processed by searching for text within a tolerance-expanded version of
-    that rectangle, scaled to each image's resolution.
+    The user draws a rectangle on the first image to mark the identifier
+    region. Subsequent images are processed by scaling that rectangle to each
+    image's resolution (plus a small tolerance margin) and running OCR
+    directly on the crop.
     """
 
     # Pipeline-2-specific calibration signal
@@ -230,12 +174,10 @@ class Pipeline2(AbstractPipeline):
         super().__init__(detection_engine, recognition_engine, parent)
         self._ref_image: Path | None = None
         self._roi_bbox: BoundingBox | None = None
-        self._snapped_bbox: BoundingBox | None = None
         self._batch_total: int = 0
         self._batch_done: int = 0
 
         self._signals = WorkerSignals()
-        self._signals.text_regions_result.connect(self._on_roi_snapped)
         self._signals.ocr_result.connect(self._on_ocr_result)
         self._signals.batch_image_result.connect(self._on_batch_image_result)
         self._signals.error.connect(self.calibration_error)
@@ -252,29 +194,22 @@ class Pipeline2(AbstractPipeline):
         if self._stopped:
             return
         self._roi_bbox = BoundingBox.from_qrectf(rect)
-        worker = _RoiTextDetectionWorker(
-            self._ref_image, self._roi_bbox, self._detection_engine, self._signals
-        )
-        QThreadPool.globalInstance().start(worker)
-
-    def _on_roi_snapped(self, rects: list[QRectF]) -> None:
-        if self._stopped or not rects:
-            return
-        self._snapped_bbox = BoundingBox.from_qrectf(rects[0])
-        self.roi_confirmed.emit(rects[0])
+        self.roi_confirmed.emit(rect)
 
     def confirm_roi(self, accepted: bool, manual_rect: QRectF | None = None) -> None:
         if self._stopped:
             return
         if not accepted and manual_rect is not None:
-            self._snapped_bbox = BoundingBox.from_qrectf(manual_rect)
+            self._roi_bbox = BoundingBox.from_qrectf(manual_rect)
         elif not accepted:
-            self._snapped_bbox = None
+            self._roi_bbox = None
             return
-        if self._snapped_bbox is None:
+        if self._roi_bbox is None:
             return
         worker = OcrWorker(
-            self._ref_image, self._snapped_bbox, self._recognition_engine, self._signals
+            self._ref_image, self._roi_bbox, self._recognition_engine, self._signals,
+            rotation_degrees=self._rotation_degrees,
+            invert_colors=self._invert_colors,
         )
         QThreadPool.globalInstance().start(worker)
 
@@ -284,14 +219,20 @@ class Pipeline2(AbstractPipeline):
         self.ocr_result_ready.emit(text, confidence)
 
     def confirm_ocr_result(self, text: str) -> None:
-        if self._stopped or self._ref_image is None or self._snapped_bbox is None:
+        if self._stopped or self._ref_image is None or self._roi_bbox is None:
             return
-        from PySide6.QtGui import QImageReader
-        reader = QImageReader(str(self._ref_image))
-        size = reader.size()
-        ref_res = (size.width(), size.height()) if size.isValid() else (1000, 1000)
+        # Store the *rotated* dimensions so batch workers scale in the same space.
+        ref_img = load_qimage(self._ref_image)
+        if ref_img is not None:
+            ref_img = rotate_qimage(ref_img, self._rotation_degrees)
+            ref_res = (ref_img.width(), ref_img.height())
+        else:
+            from PySide6.QtGui import QImageReader
+            reader = QImageReader(str(self._ref_image))
+            size = reader.size()
+            ref_res = (size.width(), size.height()) if size.isValid() else (1000, 1000)
         calib = Pipeline2CalibrationData(
-            roi_bbox=self._snapped_bbox,
+            roi_bbox=self._roi_bbox,
             reference_resolution=ref_res,
             reference_identifier=text,
         )
@@ -319,7 +260,7 @@ class Pipeline2(AbstractPipeline):
 
         worker = _SequentialBatchWorker2(
             images, calib, min_confidence,
-            self._detection_engine, self._recognition_engine,
+            self._recognition_engine,
             self._signals, rename_preview=rename_preview,
         )
         QThreadPool.globalInstance().start(worker)
@@ -339,15 +280,22 @@ class Pipeline2(AbstractPipeline):
 # ---------------------------------------------------------------------------
 
 
+def _tolerance_rect(roi: QRectF) -> QRectF:
+    """Return the tolerance-expanded version of *roi* (1.5× in each dimension)."""
+    tw = roi.width() * _TOLERANCE
+    th = roi.height() * _TOLERANCE
+    return QRectF(roi.x() - tw, roi.y() - th, roi.width() + 2 * tw, roi.height() + 2 * th)
+
+
 class _Pipeline2CalibrationController(AbstractCalibrationController):
-    """4-step ROI-selection calibration controller.
+    """3-step ROI-selection calibration controller.
 
     Steps
     -----
     1. User draws ROI around identifier
-    2. Text detection snaps to precise boundary (automatic)
-    3. User confirms / redraws snapped region
-    4. OCR on snapped region → user confirms text
+    2. User confirms / redraws the region (both the exact ROI and the
+       tolerance-expanded search area are shown)
+    3. OCR on confirmed region → user confirms text
     """
 
     def __init__(self, pipeline: Pipeline2) -> None:
@@ -390,7 +338,7 @@ class _Pipeline2CalibrationController(AbstractCalibrationController):
 
     def _step1(self) -> None:
         self._widget.load_image(self._image_path())
-        self._widget.set_step(1, 4, "Draw ROI around the identifier")
+        self._widget.set_step(1, 3, "Draw ROI around the identifier")
         self._widget.start_roi_selection("roi")
         self._widget.set_buttons(self._skip_spec() + [("cancel", "Cancel")])
         self._connect_cancel()
@@ -407,17 +355,13 @@ class _Pipeline2CalibrationController(AbstractCalibrationController):
 
     def _on_roi_drawn(self, mode: str, rect: QRectF) -> None:  # noqa: ARG002
         self._widget.stop_roi_selection()
-        self._widget.clear_overlays()
-        self._widget.show_rect_overlay(rect, QColor(0, 120, 255), width=8)
-        self._widget.set_step(2, 4, "Snapping to text boundary…")
-        self._widget.set_buttons([("cancel", "Cancel")])
-        self._connect_cancel()
         self._pipeline.set_roi(rect)
 
-    def _on_roi_confirmed(self, snapped: QRectF) -> None:
-        self._widget.set_step(3, 4, "Confirm identifier region")
+    def _on_roi_confirmed(self, roi: QRectF) -> None:
+        self._widget.set_step(2, 3, "Confirm identifier region (orange = tolerance area)")
         self._widget.clear_overlays()
-        self._widget.show_rect_overlay(snapped, QColor(0, 200, 0), width=8)
+        self._widget.show_rect_overlay(_tolerance_rect(roi), QColor(255, 165, 0), width=4)
+        self._widget.show_rect_overlay(roi, QColor(0, 200, 0), width=8)
         self._widget.set_buttons([
             ("confirm", "Confirm"), ("redraw", "Redraw"), ("cancel", "Cancel"),
         ])
@@ -428,13 +372,13 @@ class _Pipeline2CalibrationController(AbstractCalibrationController):
     def _on_redraw(self) -> None:
         self._widget.clear_overlays()
         self._widget.start_roi_selection("roi")
-        self._widget.set_step(1, 4, "Draw ROI around the identifier")
+        self._widget.set_step(1, 3, "Draw ROI around the identifier")
         self._widget.set_buttons(self._skip_spec() + [("cancel", "Cancel")])
         self._connect_cancel()
         self._connect_skip()
 
     def _on_ocr_result_ready(self, text: str, confidence: float) -> None:
-        self._widget.set_step(4, 4, f"Confirm OCR result (confidence: {confidence:.0%})")
+        self._widget.set_step(3, 3, f"Confirm OCR result (confidence: {confidence:.0%})")
         self._widget.show_ocr_panel(text)
         self._widget.set_buttons([])
 

@@ -7,12 +7,11 @@ import os
 from pathlib import Path
 
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QMainWindow, QWidget
+from PySide6.QtWidgets import QMainWindow, QMessageBox, QWidget
 from PySide6QtAds import CDockManager
 
 from app.core.config import ConfigManager
 from app.core.roles import RoleManager
-from app.plugin.base import IBaseToolPlugin
 from app.plugin.registry import ToolRegistry
 from app.shell.docking_manager import DockingManager
 from app.shell.layout import LayoutPersistence
@@ -150,10 +149,7 @@ class MainWindow(QMainWindow):
 
         instance_key, instance_id = self._tool_registry.allocate_instance_key(name, allow_multiple)
 
-        if issubclass(tool_cls, IBaseToolPlugin):
-            tool_instance = tool_cls(self._config_manager)
-        else:
-            tool_instance = tool_cls()
+        tool_instance = tool_cls(self._config_manager)
         tool_instance._assign_instance_id(instance_id)
         widget = tool_instance.create_widget(self)
         closable = getattr(tool_cls, "closable", True)
@@ -166,8 +162,10 @@ class MainWindow(QMainWindow):
             self._open_instance_names.pop(instance_key, None)
             _logger.info("Tool closed: %s", instance_key)
 
+        can_close_fn = getattr(tool_instance, "can_close", None)
         self._docking_manager.add_tool_widget(
-            instance_key, widget, closable=closable, on_close=_on_tool_closed
+            instance_key, widget, closable=closable, on_close=_on_tool_closed,
+            can_close=can_close_fn if callable(can_close_fn) else None,
         )
         self._tool_registry.set_instance(instance_key, widget)
         if hasattr(widget, "open_tool_with_path_requested"):
@@ -213,15 +211,22 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
-        """Handle window close: save configs and layout, then quit.
+        """Handle window close: check tools for unconfirmed work, then quit.
 
         Parameters
         ----------
         event : QCloseEvent
             The close event from Qt.
         """
+        for widget in self._docking_manager.get_all_widgets():
+            can_close = getattr(widget, "can_close", None)
+            if callable(can_close) and not can_close():
+                event.ignore()
+                return
+
         _logger.info("Shutdown initiated.")
         self._config_manager.save_all()
+        self._config_manager.save_all_instances()
         self._layout_persistence.save_open_tools(list(self._open_instance_names.values()))
         self._layout_persistence.save_geometry(self.saveGeometry())
         self.save_layout()
@@ -263,9 +268,8 @@ class MainWindow(QMainWindow):
         exists (e.g. very first launch or after the state files are deleted).
         """
         self.resize(1400, 900)
-        for tool_cls in self._tool_registry.get_base_tools():
-            if getattr(tool_cls, "auto_open_on_startup", False):
-                self.open_tool(tool_cls.name)
+        for tool_cls in self._tool_registry.get_auto_open_tools():
+            self.open_tool(tool_cls.name)
 
     def _on_open_tool_with_path(self, tool_name: str, path: object) -> None:
         """Open a fresh instance of *tool_name* and load *path* into it.
