@@ -1,0 +1,261 @@
+@startuml calibration_sequence
+!theme plain
+skinparam backgroundColor white
+skinparam defaultFontName Arial
+skinparam defaultFontSize 11
+skinparam sequenceArrowThickness 1.5
+skinparam sequenceLifeLineBorderColor #555555
+skinparam sequenceParticipantBackgroundColor #FAFAFA
+skinparam sequenceParticipantBorderColor #999999
+skinparam sequenceGroupBackgroundColor #F5F5F5
+
+title Calibration Flow — Feature-Based Alignment Pipeline (UML 2.5.1)
+
+actor User
+participant "SciBitTool" as Tool
+participant "CalibrationWidget" as CW
+participant "FeatureAlignment\nController" as CC
+participant "FeatureBased\nAlignmentPipeline" as P
+participant "Stage" as S
+participant "OperatorPool" as Pool
+participant "Operator" as Op
+participant "FeatureAlignment\nCalibrationSession" as CS
+participant "IdentifierPattern\nPresetRegistry" as Reg
+
+== Initialization ==
+
+User -> Tool : clicks Start
+activate Tool
+Tool -> Tool : load Configuration
+Tool -> P : construct from Configuration
+activate P
+P -> Pool : create OperatorPool
+activate Pool
+Pool --> P
+deactivate Pool
+P --> Tool
+Tool -> CW : create CalibrationWidget(pipeline, image_paths)
+activate CW
+CW -> P : create_calibration_controller()
+P -> CC : instantiate FeatureAlignmentController
+activate CC
+CC --> CW
+CW -> CC : start(widget, image_paths)
+deactivate Tool
+
+== Stage 0: Calibration Setup ==
+
+CC -> CW : load_image(image_paths[0])
+CC -> CW : set_step(1, 6, "Calibration Setup")
+CW --> User : show image preview (left)\n+ rotation slider + invert toggle\n+ skip/confirm buttons (right panel)
+
+loop User adjusts settings
+    User -> CW : adjust rotation slider / toggle invert
+    CW --> User : live preview update
+end
+
+alt User skips image
+    User -> CW : clicks Skip
+    CW -> CC : skip signal
+    CC -> CW : load_image(image_paths[next])
+    CW --> User : show next image with current settings
+end
+
+User -> CW : clicks Confirm
+CW -> CC : setup confirmed
+CC -> CS : create FeatureAlignmentCalibrationSession(\nrough_rotation_degrees, invert_colors)
+activate CS
+
+== Stage 1: Chip Region Detection ==
+
+CC -> CW : set_step(2, 6, "Detecting chip boundary...")
+CC -> S : run_calibration(image, session)
+activate S
+S -> Pool : get_operator(OpenCVOperator)
+Pool -> Op : instantiate (if not cached)
+activate Op
+Op --> Pool : instance
+Pool --> S : operator instance
+S -> Op : __call__(image, params)
+Op --> S : BoundingBox result
+deactivate Op
+
+opt debug_export_mode == CALIBRATION or ALL
+    S -> S : save interim images to\n_debug_<timestamp>/<image>/\nchip_region_detection_*.png
+end
+
+S --> CC : StageResult
+deactivate S
+
+CC -> CW : show_rect_overlay(bbox, green)
+CC -> CW : set_buttons([Confirm, Retry, Draw Manually, Cancel])
+CW --> User : show detected chip boundary
+
+alt User confirms
+    User -> CW : clicks Confirm
+    CW -> CC : confirm signal
+    CC -> CS : store chip_region
+
+else User retries with adjusted parameters
+    User -> CW : adjusts parameters + clicks Retry
+    CW -> CC : retry signal
+    CC -> CW : clear_overlays()
+    CC -> S : run_calibration(image, session) with new params
+    note right: Loop until confirmed
+
+else User draws manually
+    User -> CW : clicks Draw Manually
+    CW -> CC : manual signal
+    CC -> CW : clear_overlays()
+    CC -> CW : start_roi_selection("chip")
+    User -> CW : draws bounding box
+    CW -> CC : roi_drawn("chip", rect)
+    CC -> CW : stop_roi_selection()
+    CC -> CS : store manual chip_region
+end
+
+== Stage 2: Feature-Based Alignment ==
+
+CC -> CW : set_step(3, 6, "Aligning to template...")
+CC -> S : run_calibration(image, session)
+activate S
+S -> Pool : get_operator(OpenCVOperator)
+Pool --> S : same instance (cached)
+S -> Op : __call__(image, template, keypoints, params)
+activate Op
+Op --> S : homography + warped image
+deactivate Op
+
+opt debug_export_mode == CALIBRATION or ALL
+    S -> S : save interim images to\nfeature_based_alignment_*.png
+end
+
+S --> CC : StageResult
+deactivate S
+
+CC -> CS : store template_image, template_keypoints,\ntemplate_descriptors
+CC -> CW : load_image(warped_image)
+CC -> CW : set_buttons([Confirm, Retry, Cancel])
+CW --> User : show aligned chip image
+
+alt User confirms
+    User -> CW : clicks Confirm
+    CW -> CC : confirm signal
+
+else User retries with adjusted parameters
+    User -> CW : adjusts parameters + clicks Retry
+    CW -> CC : retry signal
+    CC -> S : run_calibration(image, session) with new params
+end
+
+== Stage 3: Identifier Region Detection ==
+
+CC -> CW : set_step(4, 6, "Detecting text regions...")
+CC -> S : run_calibration(aligned_image, session)
+activate S
+S -> Pool : get_operator(PaddleOCROperator)
+Pool -> Op : instantiate PaddleOCR (lazy init detection model)
+activate Op
+Op --> Pool : instance
+Pool --> S : operator instance
+S -> Op : __call__(image, params)
+Op --> S : list[BoundingBox]
+deactivate Op
+
+opt debug_export_mode == CALIBRATION or ALL
+    S -> S : save interim images to\nidentifier_region_detection_*.png
+end
+
+S --> CC : StageResult
+deactivate S
+
+CC -> CW : clear_overlays()
+CC -> CW : show_rects_overlay(regions, magenta)
+CC -> CW : set_buttons([Draw Manually, Cancel])
+CW --> User : show detected text regions\n(selectable)
+
+alt User selects a region
+    User -> CW : clicks on a text region
+    CW -> CC : scene_selection_changed
+    CC -> CS : store identifier_roi
+
+else User draws manually
+    User -> CW : clicks Draw Manually
+    CC -> CW : clear_overlays()
+    CC -> CW : start_roi_selection("identifier")
+    User -> CW : draws identifier box
+    CW -> CC : roi_drawn("identifier", rect)
+    CC -> CW : stop_roi_selection()
+    CC -> CS : store identifier_roi
+end
+
+== Stage 4: Text Recognition ==
+
+CC -> CW : set_step(5, 6, "Running OCR...")
+
+note over CC, Reg
+    Derive charset_hint from
+    IdentifierPatternPreset regex
+end note
+
+CC -> Reg : get_preset(preset_name)
+activate Reg
+Reg --> CC : IdentifierPatternPreset
+deactivate Reg
+CC -> CC : derive charset_hint from regex
+
+CC -> S : run_calibration(identifier_crop, session)
+activate S
+S -> Pool : get_operator(PaddleOCROperator)
+Pool --> S : same instance (cached, lazy init recognition model)
+S -> Op : __call__(preprocessed_crop, params, charset_hint)
+activate Op
+Op --> S : (text, confidence)
+deactivate Op
+
+opt debug_export_mode == CALIBRATION or ALL
+    S -> S : save interim images to\ntext_recognition_*.png
+end
+
+S --> CC : StageResult
+deactivate S
+
+CC -> CW : set_step(5, 6, "Confirm OCR result (confidence: XX%)")
+CC -> CW : show_ocr_panel(recognized_text)
+CW --> User : show editable text field\nwith recognized string (auto-focused)
+
+User -> CW : edits text (optional) + clicks Confirm
+CW -> CC : ocr_confirmed(text)
+CC -> CW : hide_ocr_panel()
+
+== Stage 5: Validation ==
+
+CC -> Reg : get_preset(preset_name)
+activate Reg
+Reg --> CC : IdentifierPatternPreset (regex)
+deactivate Reg
+CC -> CC : match confirmed text against regex
+
+alt regex matches
+    CC -> CW : set_step(6, 6, "Validation passed")
+else regex does not match
+    CC -> CW : set_step(6, 6, "Validation failed — pattern mismatch")
+    note right: Calibration still completes;\nvalidation result is informational\nduring calibration
+end
+
+== Calibration Complete ==
+
+CC -> CS : store final confirmed text
+CC ->> CW : <<signal>> calibration_complete(CalibrationSession)
+deactivate CS
+CW ->> Tool : <<signal>> calibration_complete(CalibrationSession)
+deactivate CC
+deactivate CW
+
+activate Tool
+Tool -> Tool : store CalibrationSession
+Tool -> Tool : record calibration end time
+Tool -> Tool : transition to batch processing
+deactivate Tool
+
+@enduml
