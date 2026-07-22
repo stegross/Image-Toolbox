@@ -1,4 +1,4 @@
-"""Main application window (REQ-HS-001, REQ-HS-004, REQ-HS-007)."""
+"""Main application window (REQ-HS-001, REQ-HS-004, REQ-HS-005)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QMainWindow, QMessageBox, QWidget
+from PySide6.QtWidgets import QMainWindow, QWidget
 from PySide6QtAds import CDockManager
 
 from app.core.config import ConfigManager
@@ -70,7 +70,7 @@ class MainWindow(QMainWindow):
         2. Load the ``.ui`` file — creates the ``CDockManager`` and menu bar.
         3. Wrap the dock manager.
         4. Connect static menu actions and build dynamic category menus.
-        5. Restore previously saved layout (REQ-HS-007).
+        5. Restore previously saved layout (REQ-HS-005).
         6. Open all base tools automatically.
         """
         # Config flags must be set before CDockManager is instantiated
@@ -109,19 +109,20 @@ class MainWindow(QMainWindow):
 
         _logger.info("MainWindow initialised.")
 
-    def open_tool(self, name: str) -> QWidget | None:
-        """Open a tool by name, respecting instance and permission rules.
+    def open_tool(self, cls_name: str) -> QWidget | None:
+        """Open a tool by class name, respecting instance and permission rules.
 
-        If *name* is already instantiated and ``allow_multiple_instances``
+        If *cls_name* is already instantiated and ``allow_multiple_instances``
         is ``False``, the existing dock widget is focused instead and ``None``
         is returned.  Otherwise the new widget is returned so callers can
         perform post-open operations (e.g. call ``open_from_path``).
 
         Parameters
         ----------
-        name : str
-            Tool name as registered in
-            :class:`~app.plugin.registry.ToolRegistry`.
+        cls_name : str
+            Python class name of the tool as registered in
+            :class:`~app.plugin.registry.ToolRegistry` (e.g. ``"Scibit"``).
+            Use :attr:`~app.plugin.base.IToolPlugin.name` only for display.
 
         Returns
         -------
@@ -130,31 +131,37 @@ class MainWindow(QMainWindow):
             was focused.
         """
         try:
-            tool_cls = self._tool_registry.get_tool(name)
+            tool_cls = self._tool_registry.get_tool(cls_name)
         except KeyError:
-            _logger.error("open_tool: unknown tool '%s'", name)
+            _logger.error("open_tool: unknown tool class '%s'", cls_name)
             return None
 
-        already_open = self._tool_registry.is_instantiated(name)
+        already_open = self._tool_registry.is_instantiated(cls_name)
         allow_multiple = getattr(tool_cls, "allow_multiple_instances", False)
 
         if already_open and not allow_multiple:
-            _logger.debug("Tool '%s' already open — focusing existing widget.", name)
-            self._docking_manager.focus_widget(name)
+            _logger.debug("Tool '%s' already open — focusing existing widget.", cls_name)
+            self._docking_manager.focus_widget(cls_name)
             return None
 
-        if not self._role_manager.has_permission(name):
-            _logger.warning("Access denied: user has no permission for '%s'.", name)
+        if not self._role_manager.has_permission(cls_name):
+            _logger.warning("Access denied: user has no permission for '%s'.", cls_name)
             return None
 
-        instance_key, instance_id = self._tool_registry.allocate_instance_key(name, allow_multiple)
+        instance_key, instance_id = self._tool_registry.allocate_instance_key(
+            cls_name, allow_multiple
+        )
+
+        # Compute the human-readable tab title from the display name.
+        display_name = tool_cls.name
+        display_title = display_name if not allow_multiple else f"{display_name} ({instance_id})"
 
         tool_instance = tool_cls(self._config_manager)
         tool_instance._assign_instance_id(instance_id)
         widget = tool_instance.create_widget(self)
         closable = getattr(tool_cls, "closable", True)
 
-        self._open_instance_names[instance_key] = name
+        self._open_instance_names[instance_key] = cls_name
 
         def _on_tool_closed() -> None:
             tool_instance.on_close()
@@ -164,15 +171,19 @@ class MainWindow(QMainWindow):
 
         can_close_fn = getattr(tool_instance, "can_close", None)
         self._docking_manager.add_tool_widget(
-            instance_key, widget, closable=closable, on_close=_on_tool_closed,
+            instance_key,
+            widget,
+            closable=closable,
+            on_close=_on_tool_closed,
             can_close=can_close_fn if callable(can_close_fn) else None,
+            title=display_title,
         )
         self._tool_registry.set_instance(instance_key, widget)
         if hasattr(widget, "open_tool_with_path_requested"):
             widget.open_tool_with_path_requested.connect(self._on_open_tool_with_path)
         tool_instance.on_activate()
 
-        _logger.info("Tool opened: %s", instance_key)
+        _logger.info("Tool opened: %s ('%s')", instance_key, display_title)
         return widget
 
     def close_tool(self, name: str) -> None:
@@ -193,7 +204,7 @@ class MainWindow(QMainWindow):
         self._layout_persistence.save(state)
 
     def restore_layout(self) -> None:
-        """Restore the dock layout and window geometry from the last saved session (REQ-HS-007)."""
+        """Restore the dock layout and window geometry from the last saved session (REQ-HS-005)."""
         geometry = self._layout_persistence.load_geometry()
         if geometry is not None:
             self.restoreGeometry(geometry)
@@ -253,7 +264,9 @@ class MainWindow(QMainWindow):
             for tool_cls in tools:
                 action = menu.addAction(tool_cls.name)
                 action.setToolTip(tool_cls.description)
-                action.triggered.connect(lambda _checked=False, n=tool_cls.name: self.open_tool(n))
+                action.triggered.connect(
+                    lambda _checked=False, n=tool_cls.__name__: self.open_tool(n)
+                )
 
         _logger.debug(
             "Category menus built: %d categories registered.",
@@ -269,7 +282,7 @@ class MainWindow(QMainWindow):
         """
         self.resize(1400, 900)
         for tool_cls in self._tool_registry.get_auto_open_tools():
-            self.open_tool(tool_cls.name)
+            self.open_tool(tool_cls.__name__)
 
     def _on_open_tool_with_path(self, tool_name: str, path: object) -> None:
         """Open a fresh instance of *tool_name* and load *path* into it.

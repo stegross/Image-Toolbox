@@ -1,4 +1,4 @@
-"""Log Viewer base tool (REQ-HS-021, REQ-HS-017)."""
+"""Log Viewer base tool (REQ-HS-017, REQ-HS-013)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import logging
 from abc import ABCMeta
 from typing import ClassVar
 
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QComboBox,
@@ -50,10 +50,10 @@ def _subsystem_entry(pkg: object) -> tuple[str, str]:
 # Per-level foreground colors — derived from the same _STANDARD_LEVELS tuple, no hardcoded ints.
 # INFO maps to None so the default palette color is used (theme-neutral).
 _LEVEL_COLORS: dict[int, QColor | None] = {
-    logging.DEBUG: QColor(65, 65, 65),   # gray
-    logging.INFO: None,                      # default palette color
-    logging.WARNING: QColor(220, 160, 0),   # amber
-    logging.ERROR: QColor(200, 60, 60),     # red
+    logging.DEBUG: QColor(65, 65, 65),  # gray
+    logging.INFO: None,  # default palette color
+    logging.WARNING: QColor(220, 160, 0),  # amber
+    logging.ERROR: QColor(200, 60, 60),  # red
     logging.CRITICAL: QColor(220, 30, 30),  # bright red
 }
 

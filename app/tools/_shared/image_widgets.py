@@ -9,9 +9,8 @@ from PySide6.QtWidgets import (
     QGraphicsPixmapItem,
     QGraphicsScene,
     QGraphicsView,
-    QPushButton,
     QLabel,
-    QSizePolicy,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )

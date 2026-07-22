@@ -24,5 +24,15 @@ build/
 .vscode/
 .idea/
 
+# AI
+.claude/
+
+# Generated documentation
+docs/_build/
+docs/api/
+
 # Misc
 .cache/
+
+# Excel Temps
+~$*

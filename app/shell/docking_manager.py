@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import Any
 
 from PySide6.QtCore import QByteArray
 from PySide6.QtWidgets import QWidget
@@ -29,6 +28,7 @@ class DockingManager:
     def __init__(self, dock_manager: CDockManager) -> None:
         self._dock_manager = dock_manager
         self._dock_widgets: dict[str, CDockWidget] = {}
+        self._is_restoring: bool = False
 
     def add_tool_widget(
         self,
@@ -37,13 +37,15 @@ class DockingManager:
         closable: bool = True,
         on_close: Callable[[], None] | None = None,
         can_close: Callable[[], bool] | None = None,
+        title: str | None = None,
     ) -> CDockWidget:
         """Add a tool widget to the central dock area.
 
         Parameters
         ----------
         name : str
-            Unique tool name used as the dock widget title and lookup key.
+            Internal lookup key used for :meth:`focus_widget` and
+            :meth:`remove_tool_widget`.  Must be unique across all open docks.
         widget : QWidget
             The tool's content widget.
         closable : bool
@@ -57,13 +59,16 @@ class DockingManager:
             If it returns ``False`` the close is cancelled.  Falls back to
             simple close-signal handling when ``CustomCloseHandling`` is not
             available in the installed Qt ADS version.
+        title : str | None
+            Human-readable label shown in the dock tab.  Defaults to *name*
+            when omitted.
 
         Returns
         -------
         CDockWidget
             The created dock widget.
         """
-        dock = CDockWidget(name)
+        dock = CDockWidget(title if title is not None else name)
         dock.setWidget(widget)
 
         if not closable:
@@ -81,6 +86,8 @@ class DockingManager:
                 _logger.debug("CustomCloseHandling not available — falling back to closed signal")
 
         def _on_dock_closed() -> None:
+            if self._is_restoring:
+                return
             self._dock_widgets.pop(name, None)
             if on_close is not None:
                 on_close()
@@ -150,9 +157,13 @@ class DockingManager:
         bool
             ``True`` if the restore succeeded.
         """
-        result = self._dock_manager.restoreState(state)
-        # Qt ADS can restore dock widgets in a closed/hidden state (e.g. when
-        # they were a non-active tab).  Force all session-tracked widgets visible.
+        self._is_restoring = True
+        try:
+            result = self._dock_manager.restoreState(state)
+        finally:
+            self._is_restoring = False
+        # Qt ADS may close dock widgets that weren't in the saved state, or that
+        # were saved as closed/hidden tabs.  Force all session-tracked widgets visible.
         for dock in self._dock_widgets.values():
             if dock.isClosed():
                 dock.toggleView(True)

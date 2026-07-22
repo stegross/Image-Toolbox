@@ -1,4 +1,4 @@
-"""Dock layout state persistence between sessions (REQ-HS-007)."""
+"""Dock layout state persistence between sessions (REQ-HS-005)."""
 
 from __future__ import annotations
 

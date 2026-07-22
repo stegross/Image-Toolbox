@@ -1,4 +1,4 @@
-"""Image Viewer base tool (REQ-HS-021)."""
+"""Image Viewer base tool (REQ-HS-017)."""
 
 from __future__ import annotations
 
@@ -44,13 +44,20 @@ from app.core.config import ConfigManager
 from app.plugin.base import IToolPlugin
 from app.plugin.categories import ToolCategory
 from app.tools._shared.image_widgets import ImageArea as _ImageArea
-from app.tools._shared.image_widgets import PanZoomView as _PanZoomView
 
 _logger = logging.getLogger("vi_toolbox.tools.image_viewer")
 
-_SUPPORTED_EXTENSIONS: frozenset[str] = frozenset({
-    ".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".gif",
-})
+_SUPPORTED_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".bmp",
+        ".tiff",
+        ".tif",
+        ".gif",
+    }
+)
 
 _THUMB_SIZE = QSize(64, 48)
 _THUMB_ROW_HEIGHT = 56
@@ -214,7 +221,10 @@ class _ImageListModel(QAbstractTableModel):
         return self._columns[col] if 0 <= col < len(self._columns) else None
 
     def receive_info(self, row: int, path_str: str, thumbnail: QPixmap, resolution: str) -> None:
-        """Apply async-loaded thumbnail and resolution (called from main thread via queued signal)."""
+        """Apply async-loaded thumbnail and resolution to *row*.
+
+        Invoked on the main thread via a queued signal from the loader thread.
+        """
         if row >= len(self._images) or str(self._images[row]) != path_str:
             return  # stale result — folder changed while loading
         self._thumbnails[row] = thumbnail
@@ -470,7 +480,7 @@ class _ImageViewerMeta(type(QWidget), ABCMeta):
 
 
 class ImageViewer(QWidget, IToolPlugin, metaclass=_ImageViewerMeta):
-    """Zoomable image viewer with folder navigation and metadata panel (REQ-HS-021).
+    """Zoomable image viewer with folder navigation and metadata panel (REQ-HS-017).
 
     Can be opened standalone or driven externally by any tool that calls
     :meth:`open_from_path` with a file or folder path.
@@ -703,8 +713,7 @@ class ImageViewer(QWidget, IToolPlugin, metaclass=_ImageViewerMeta):
     def _load_folder(self, folder: Path, initial_file: Path | None = None) -> None:
         self._folder = folder
         self._images = sorted(
-            p for p in folder.iterdir()
-            if p.is_file() and p.suffix.lower() in _SUPPORTED_EXTENSIONS
+            p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in _SUPPORTED_EXTENSIONS
         )
 
         self._image_list_panel.set_images(self._images)
@@ -787,9 +796,7 @@ class ImageViewer(QWidget, IToolPlugin, metaclass=_ImageViewerMeta):
 
         if action is act_file:
             exts = " ".join(f"*{e}" for e in sorted(_SUPPORTED_EXTENSIONS))
-            path_str, _ = QFileDialog.getOpenFileName(
-                self, "Open Image", start, f"Images ({exts})"
-            )
+            path_str, _ = QFileDialog.getOpenFileName(self, "Open Image", start, f"Images ({exts})")
             if path_str:
                 self.open_from_path(Path(path_str))
         elif action is act_folder:

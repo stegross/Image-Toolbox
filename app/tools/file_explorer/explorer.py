@@ -1,4 +1,4 @@
-"""File Explorer base tool (REQ-HS-021)."""
+"""File Explorer base tool (REQ-HS-017)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from abc import ABCMeta
 from pathlib import Path
 from typing import ClassVar
 
-from PySide6.QtCore import QModelIndex, QPoint, QTimer, Qt, Signal
+from PySide6.QtCore import QModelIndex, QPoint, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QFileDialog,
     QFileSystemModel,
@@ -183,24 +183,29 @@ class FileExplorer(QWidget, IToolPlugin, metaclass=_FileExplorerMeta):
         # (no active instance required — each click opens a fresh instance).
         open_in_actions: dict[object, str] = {}
         if path is not None:
-            from app.plugin.registry import ToolRegistry  # noqa: PLC0415 (lazy — avoids circular dep)
+            from app.plugin.registry import (
+                ToolRegistry,  # noqa: PLC0415 (lazy — avoids circular dep)
+            )
 
             ext = path.suffix.lower()
             handlers = [
-                name
-                for name, tool_cls in ToolRegistry._registered_tools.items()
+                (cls_name, tool_cls.name)
+                for cls_name, tool_cls in ToolRegistry._registered_tools.items()
                 if tool_cls is not type(self)
                 and (
                     (path.is_dir() and getattr(tool_cls, "handles_folders", False))
-                    or (path.is_file() and ext in getattr(tool_cls, "handled_path_extensions", frozenset()))
+                    or (
+                        path.is_file()
+                        and ext in getattr(tool_cls, "handled_path_extensions", frozenset())
+                    )
                 )
             ]
             if handlers:
                 menu.addSeparator()
                 open_in_menu = QMenu("Open in…", menu)
-                for name in handlers:
-                    act = open_in_menu.addAction(name)
-                    open_in_actions[act] = name
+                for cls_name, display_name in handlers:
+                    act = open_in_menu.addAction(display_name)
+                    open_in_actions[act] = cls_name
                 menu.addMenu(open_in_menu)
 
         action = menu.exec(self._tree.viewport().mapToGlobal(pos))
