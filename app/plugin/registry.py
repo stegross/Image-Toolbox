@@ -18,7 +18,7 @@ from app.plugin.categories import ToolCategory
 from app.tools.file_explorer.explorer import FileExplorer
 from app.tools.image_viewer.viewer import ImageViewer
 from app.tools.log_viewer.viewer import LogViewer
-from app.tools.identification_tool.tool import SciBitTool
+from app.tools.scibit.tool import Scibit
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
@@ -93,15 +93,14 @@ class ToolRegistry:
         Raises
         ------
         ValueError
-            If a tool with the same :attr:`~IToolPlugin.name` is already
-            registered.
+            If a tool with the same class name is already registered.
         """
-        tool_name = plugin_cls.name
-        if tool_name in cls._registered_tools:
-            raise ValueError(f"Tool '{tool_name}' is already registered.")
-        cls._registered_tools[tool_name] = plugin_cls
+        cls_name = plugin_cls.__name__
+        if cls_name in cls._registered_tools:
+            raise ValueError(f"Tool class '{cls_name}' is already registered.")
+        cls._registered_tools[cls_name] = plugin_cls
         if auto_open:
-            cls._auto_open_tools.add(tool_name)
+            cls._auto_open_tools.add(cls_name)
 
     def get_tool(self, name: str) -> type[IToolPlugin]:
         """Return the registered tool class for *name*.
@@ -168,10 +167,7 @@ class ToolRegistry:
         list[type[IToolPlugin]]
             Tool classes that should open on first startup / no saved session.
         """
-        return [
-            t for name, t in self._registered_tools.items()
-            if name in self._auto_open_tools
-        ]
+        return [t for name, t in self._registered_tools.items() if name in self._auto_open_tools]
 
     def is_instantiated(self, name: str) -> bool:
         """Return whether *name* has an active widget instance.
@@ -224,10 +220,10 @@ class ToolRegistry:
 
 
 # ---------------------------------------------------------------------------
-# Static tool registrations (REQ-HS-015)
+# Static tool registrations (REQ-HS-011)
 # ---------------------------------------------------------------------------
 
 ToolRegistry.register(FileExplorer, auto_open=True)
 ToolRegistry.register(ImageViewer)
 ToolRegistry.register(LogViewer, auto_open=True)
-ToolRegistry.register(SciBitTool)
+ToolRegistry.register(Scibit)

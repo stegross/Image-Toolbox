@@ -1,4 +1,4 @@
-"""Per-tool configuration management (REQ-HS-009)."""
+"""Per-tool configuration management (REQ-HS-006)."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Centralized logging system for VI-Toolbox (REQ-HS-017)."""
+"""Centralized logging system for VI-Toolbox (REQ-HS-013)."""
 
 from __future__ import annotations
 

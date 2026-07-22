@@ -80,11 +80,11 @@ class Application:
         return app  # type: ignore[return-value]
 
     def _initialize_logging(self) -> None:
-        """Set up the application-wide logging system (REQ-HS-017)."""
+        """Set up the application-wide logging system (REQ-HS-013)."""
         initialize_logging(log_dir=_APP_DATA_DIR / "logs")
 
     def _check_roles(self) -> RoleManager:
-        """Resolve the current user's role (REQ-HS-013).
+        """Resolve the current user's role (REQ-HS-009).
 
         Returns
         -------
@@ -94,7 +94,7 @@ class Application:
         return RoleManager(config_dir=_APP_DATA_DIR / "config")
 
     def _initialize_config(self) -> ConfigManager:
-        """Initialise per-tool configuration management (REQ-HS-009).
+        """Initialise per-tool configuration management (REQ-HS-006).
 
         Returns
         -------

@@ -10,6 +10,12 @@ dependencies = [
     "PySide6>=6.7,<7",
     "PySide6-QtAds>=4.3,<5",
     "numpy>=1.26",
+    # ``opencv-python-headless`` provides cv2 without bundling a second Qt
+    # build (the GUI ``opencv-python`` ships its own Qt5 and conflicts with
+    # PySide6).  cv2 is unconditionally imported by core/pipeline.py and the
+    # OpenCV operator, so it is a hard runtime dep regardless of which OCR
+    # backend is installed.
+    "opencv-python-headless>=4.5",
 ]
 
 # Optional dependency groups — installed only when needed
@@ -35,13 +41,16 @@ ocr = [
 dev = [
     "nox>=2024.4",
     "pytest>=8.0",
-    "pytest-qt>=4.4",      # Qt widget testing helpers for pytest
-    "ruff>=0.5",           # Linter + formatter (replaces flake8, black, isort)
-    "pyinstaller>=6.0",    # Packaging into portable distribution (REQ-EC-020)
-    "pip-tools>=7.0",      # Lockfile generation (pip-compile)
+    "pytest-qt>=4.4",                  # Qt widget testing helpers for pytest
+    "ruff>=0.5",                       # Linter + formatter (replaces flake8, black, isort)
+    "pyinstaller>=6.0",                # Packaging into portable distribution (REQ-HS-014)
+    "pip-tools>=7.0",                  # Lockfile generation (pip-compile)
+    "sphinx>=7.0",                     # API documentation generator
+    "furo>=2024.0",                    # Modern Sphinx HTML theme
+    "sphinx-autodoc-typehints>=2.0",   # Render PEP 484 type hints in docstrings
 ]
 
-# Entry point: allows "python -m app" to launch the application (REQ-EC-013)
+# Entry point: allows "python -m app" to launch the application (REQ-EC-012)
 [project.scripts]
 vi-toolbox = "app.__main__:main"
 
@@ -75,7 +84,41 @@ select = [
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"   # NumPy docstring convention (REQ-EC-006)
 
+[tool.ruff.lint.pep8-naming]
+# Qt virtual-method overrides must keep Qt's camelCase exactly — PySide6
+# dispatches events by method name, so renaming breaks the override.
+extend-ignore-names = [
+    "eventFilter",
+    "mousePressEvent",
+    "mouseMoveEvent",
+    "mouseReleaseEvent",
+    "mouseDoubleClickEvent",
+    "wheelEvent",
+    "keyPressEvent",
+    "keyReleaseEvent",
+    "resizeEvent",
+    "paintEvent",
+    "closeEvent",
+    "showEvent",
+    "hideEvent",
+    "enterEvent",
+    "leaveEvent",
+    "focusInEvent",
+    "focusOutEvent",
+    "contextMenuEvent",
+    "dragEnterEvent",
+    "dragMoveEvent",
+    "dragLeaveEvent",
+    "dropEvent",
+]
+
 # ─── pytest ────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 qt_api = "pyside6"     # Tell pytest-qt to use PySide6
+markers = [
+    # End-to-end tests that need external artefacts (labelled image batches,
+    # a Tesseract install). Excluded from the nox sessions via -m "not e2e";
+    # run explicitly with: pytest -m e2e
+    "e2e: end-to-end test requiring external fixtures and OCR backends",
+]

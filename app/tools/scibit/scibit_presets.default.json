@@ -1,0 +1,12 @@
+[
+    {
+        "name": "Two uppercase letters + 1-4 digits (AA1, XD001, ZZ9999)",
+        "regex": "^[A-Z]{2}\\d{1,4}$",
+        "description": " Mod. & Det. Group"
+    },
+    {
+        "name": "One uppercase letter + 1-3 digits + hyphen + 1-3 digits (A1-1, F09-007, X999-999)",
+        "regex": "^[A-Z]\\d{1,3}-\\d{1,3}$",
+        "description": "Laser Group"
+    }
+]

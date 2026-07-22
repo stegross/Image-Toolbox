@@ -4,8 +4,12 @@
 #
 #    pip-compile --extra=dev --extra=ocr --output-file=requirements-dev.txt --strip-extras pyproject.toml
 #
+accessible-pygments==0.0.5
+    # via furo
 aistudio-sdk==0.3.8
     # via paddlex
+alabaster==1.0.0
+    # via sphinx
 altgraph==0.17.5
     # via pyinstaller
 annotated-doc==0.0.4
@@ -18,8 +22,12 @@ argcomplete==3.6.3
     # via nox
 attrs==26.1.0
     # via nox
+babel==2.18.0
+    # via sphinx
 bce-python-sdk==0.9.69
     # via aistudio-sdk
+beautifulsoup4==4.14.3
+    # via furo
 build==1.4.3
     # via pip-tools
 certifi==2026.2.25
@@ -42,6 +50,7 @@ colorama==0.4.6
     #   click
     #   colorlog
     #   pytest
+    #   sphinx
     #   tqdm
 colorlog==6.10.1
     # via
@@ -53,6 +62,8 @@ dependency-groups==1.3.1
     # via nox
 distlib==0.4.0
     # via virtualenv
+docutils==0.22.4
+    # via sphinx
 easyocr==1.7.2
     # via vi-toolbox
 filelock==3.25.2
@@ -67,6 +78,8 @@ fsspec==2026.3.0
     # via
     #   huggingface-hub
     #   torch
+furo==2025.12.19
+    # via vi-toolbox (pyproject.toml)
 future==1.0.0
     # via bce-python-sdk
 h11==0.16.0
@@ -76,7 +89,9 @@ hf-xet==1.4.3
 httpcore==1.0.9
     # via httpx
 httpx==0.28.1
-    # via huggingface-hub
+    # via
+    #   huggingface-hub
+    #   paddlepaddle
 huggingface-hub==1.10.1
     # via paddlex
 humanize==4.15.0
@@ -89,11 +104,15 @@ idna==3.11
 imageio==2.37.3
     # via scikit-image
 imagesize==2.0.0
-    # via paddlex
+    # via
+    #   paddlex
+    #   sphinx
 iniconfig==2.3.0
     # via pytest
 jinja2==3.1.6
-    # via torch
+    # via
+    #   sphinx
+    #   torch
 lazy-loader==0.5
     # via scikit-image
 markdown-it-py==4.0.0
@@ -108,6 +127,7 @@ mpmath==1.3.0
     # via sympy
 networkx==3.6.1
     # via
+    #   paddlepaddle
     #   scikit-image
     #   torch
 ninja==1.13.0
@@ -120,6 +140,8 @@ numpy==2.4.4
     #   imageio
     #   opencv-contrib-python
     #   opencv-python-headless
+    #   opt-einsum
+    #   paddlepaddle
     #   paddlex
     #   pandas
     #   scikit-image
@@ -133,6 +155,8 @@ opencv-contrib-python==4.10.0.84
     # via paddlex
 opencv-python-headless==4.13.0.92
     # via easyocr
+opt-einsum==3.3.0
+    # via paddlepaddle
 packaging==26.0
     # via
     #   build
@@ -147,8 +171,11 @@ packaging==26.0
     #   pytesseract
     #   pytest
     #   scikit-image
+    #   sphinx
     #   wheel
 paddleocr==3.4.0
+    # via vi-toolbox
+paddlepaddle==3.3.1
     # via vi-toolbox
 paddlex==3.4.3
     # via paddleocr
@@ -160,6 +187,7 @@ pillow==12.2.0
     # via
     #   easyocr
     #   imageio
+    #   paddlepaddle
     #   paddlex
     #   pytesseract
     #   scikit-image
@@ -178,6 +206,8 @@ prettytable==3.17.0
     # via
     #   aistudio-sdk
     #   paddlex
+protobuf==7.35.0
+    # via paddlepaddle
 psutil==7.2.2
     # via aistudio-sdk
 py-cpuinfo==9.0.0
@@ -194,8 +224,11 @@ pydantic-core==2.46.0
     # via pydantic
 pygments==2.20.0
     # via
+    #   accessible-pygments
+    #   furo
     #   pytest
     #   rich
+    #   sphinx
 pyinstaller==6.19.0
     # via vi-toolbox (pyproject.toml)
 pyinstaller-hooks-contrib==2026.4
@@ -251,12 +284,17 @@ requests==2.33.1
     #   modelscope
     #   paddleocr
     #   paddlex
+    #   sphinx
 rich==15.0.0
     # via typer
+roman-numerals==4.1.0
+    # via sphinx
 ruamel-yaml==0.19.1
     # via paddlex
 ruff==0.15.10
     # via vi-toolbox (pyproject.toml)
+safetensors==0.7.0
+    # via paddlepaddle
 scikit-image==0.26.0
     # via easyocr
 scipy==1.17.1
@@ -279,6 +317,32 @@ six==1.17.0
     # via
     #   bce-python-sdk
     #   python-dateutil
+snowballstemmer==3.0.1
+    # via sphinx
+soupsieve==2.8.3
+    # via beautifulsoup4
+sphinx==9.1.0
+    # via
+    #   furo
+    #   sphinx-autodoc-typehints
+    #   sphinx-basic-ng
+    #   vi-toolbox (pyproject.toml)
+sphinx-autodoc-typehints==3.10.2
+    # via vi-toolbox (pyproject.toml)
+sphinx-basic-ng==1.0.0b2
+    # via furo
+sphinxcontrib-applehelp==2.0.0
+    # via sphinx
+sphinxcontrib-devhelp==2.0.0
+    # via sphinx
+sphinxcontrib-htmlhelp==2.1.0
+    # via sphinx
+sphinxcontrib-jsmath==1.0.1
+    # via sphinx
+sphinxcontrib-qthelp==2.0.0
+    # via sphinx
+sphinxcontrib-serializinghtml==2.0.0
+    # via sphinx
 sympy==1.14.0
     # via torch
 tifffile==2026.4.11
@@ -299,8 +363,10 @@ typer==0.24.1
 typing-extensions==4.15.0
     # via
     #   anyio
+    #   beautifulsoup4
     #   huggingface-hub
     #   paddleocr
+    #   paddlepaddle
     #   paddlex
     #   pydantic
     #   pydantic-core

@@ -131,7 +131,9 @@ class TestFileExplorerConfig:
         widget = FileExplorer(config_manager)
         qtbot.addWidget(widget)
 
-        assert FileExplorer.current_root_dir == tmp_path
+        # _load_root_from_config is deferred via QTimer.singleShot(0, ...),
+        # so wait for the event loop to fire it.
+        qtbot.waitUntil(lambda: FileExplorer.current_root_dir == tmp_path)
 
     def test_invalid_root_in_config_is_ignored(
         self, qtbot: QtBot, config_manager: ConfigManager

@@ -1,0 +1,365 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>SciBitWidget</class>
+ <widget class="QWidget" name="SciBitWidget">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1000</width>
+    <height>750</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>SCIBIT</string>
+  </property>
+  <layout class="QVBoxLayout" name="main_layout">
+   <property name="spacing">
+    <number>4</number>
+   </property>
+   <property name="leftMargin">
+    <number>4</number>
+   </property>
+   <property name="topMargin">
+    <number>4</number>
+   </property>
+   <property name="rightMargin">
+    <number>4</number>
+   </property>
+   <property name="bottomMargin">
+    <number>4</number>
+   </property>
+
+   <!-- Control bar -->
+   <item>
+    <widget class="QFrame" name="control_bar_frame">
+     <property name="frameShape">
+      <enum>QFrame::Shape::StyledPanel</enum>
+     </property>
+     <property name="frameShadow">
+      <enum>QFrame::Shadow::Raised</enum>
+     </property>
+     <layout class="QVBoxLayout" name="control_bar_layout">
+      <property name="spacing">
+       <number>6</number>
+      </property>
+      <property name="leftMargin">
+       <number>6</number>
+      </property>
+      <property name="topMargin">
+       <number>6</number>
+      </property>
+      <property name="rightMargin">
+       <number>6</number>
+      </property>
+      <property name="bottomMargin">
+       <number>6</number>
+      </property>
+
+      <!-- Row 1: Folder + Start/Stop -->
+      <item>
+       <layout class="QHBoxLayout" name="folder_row_layout">
+        <property name="spacing">
+         <number>6</number>
+        </property>
+        <item>
+         <widget class="QPushButton" name="select_folder_btn">
+          <property name="text">
+           <string>Select Folder…</string>
+          </property>
+          <property name="minimumWidth">
+           <number>110</number>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="folder_path_edit">
+          <property name="readOnly">
+           <bool>true</bool>
+          </property>
+          <property name="placeholderText">
+           <string>No folder selected</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="start_btn">
+          <property name="text">
+           <string>Start</string>
+          </property>
+          <property name="minimumWidth">
+           <number>80</number>
+          </property>
+          <property name="enabled">
+           <bool>false</bool>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+
+      <!-- Row 2: Identification Config -->
+      <item>
+       <layout class="QHBoxLayout" name="identification_config_row_layout">
+        <property name="spacing">
+         <number>6</number>
+        </property>
+        <item>
+         <widget class="QLabel" name="identification_config_label">
+          <property name="text">
+           <string>Identification Config:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="identification_config_combo">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+            <horstretch>1</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
+          <property name="toolTip">
+           <string>Select a saved identification configuration to restore all pipeline settings, or save the current settings as a new configuration.</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="save_config_btn">
+          <property name="text">
+           <string>Save…</string>
+          </property>
+          <property name="minimumWidth">
+           <number>70</number>
+          </property>
+          <property name="toolTip">
+           <string>Save the current pipeline and stage configuration under a name.</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+
+      <!-- Row 3: Configuration group (collapsible) -->
+      <item>
+       <widget class="QGroupBox" name="config_group">
+        <property name="title">
+         <string>Configuration</string>
+        </property>
+        <property name="checkable">
+         <bool>true</bool>
+        </property>
+        <property name="checked">
+         <bool>false</bool>
+        </property>
+        <layout class="QFormLayout" name="config_form_layout">
+         <property name="labelAlignment">
+          <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignVCenter</set>
+         </property>
+         <property name="horizontalSpacing">
+          <number>12</number>
+         </property>
+         <property name="verticalSpacing">
+          <number>6</number>
+         </property>
+         <property name="leftMargin">
+          <number>8</number>
+         </property>
+         <property name="topMargin">
+          <number>6</number>
+         </property>
+         <property name="rightMargin">
+          <number>8</number>
+         </property>
+         <property name="bottomMargin">
+          <number>6</number>
+         </property>
+
+         <item row="0" column="0">
+          <widget class="QLabel" name="pipeline_label">
+           <property name="text">
+            <string>Pipeline:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="1">
+          <widget class="QComboBox" name="pipeline_combo">
+           <property name="minimumWidth">
+            <number>220</number>
+           </property>
+           <property name="toolTip">
+            <string>Select the processing pipeline to use for this run.</string>
+           </property>
+          </widget>
+         </item>
+
+         <item row="1" column="0">
+          <widget class="QLabel" name="preset_label">
+           <property name="text">
+            <string>Identifier Preset:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="1">
+          <widget class="QComboBox" name="preset_combo">
+           <property name="minimumWidth">
+            <number>220</number>
+           </property>
+           <property name="toolTip">
+            <string>Pattern that the recognised identifier must match.</string>
+           </property>
+          </widget>
+         </item>
+
+         <item row="2" column="0">
+          <widget class="QLabel" name="manual_confirmation_label">
+           <property name="text">
+            <string>Manual Confirmation:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="1">
+          <widget class="QCheckBox" name="manual_confirmation_check">
+           <property name="text">
+            <string>Required for all results</string>
+           </property>
+           <property name="checked">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+
+         <item row="3" column="0">
+          <widget class="QLabel" name="confidence_label">
+           <property name="text">
+            <string>Min Confidence (%):</string>
+           </property>
+          </widget>
+         </item>
+         <item row="3" column="1">
+          <widget class="QDoubleSpinBox" name="confidence_spin">
+           <property name="minimum">
+            <double>0.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>100.000000000000000</double>
+           </property>
+           <property name="singleStep">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="decimals">
+            <number>1</number>
+           </property>
+           <property name="value">
+            <double>85.000000000000000</double>
+           </property>
+          </widget>
+         </item>
+
+         <item row="4" column="0">
+          <widget class="QLabel" name="debug_mode_label">
+           <property name="text">
+            <string>Debug Export:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="4" column="1">
+          <widget class="QComboBox" name="debug_mode_combo">
+           <property name="minimumWidth">
+            <number>160</number>
+           </property>
+           <item>
+            <property name="text">
+             <string>Disabled</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Calibration Only</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>All</string>
+            </property>
+           </item>
+          </widget>
+         </item>
+
+         <item row="5" column="0">
+          <widget class="QLabel" name="test_mode_label">
+           <property name="text">
+            <string>Test Mode:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="5" column="1">
+          <widget class="QCheckBox" name="test_mode_check">
+           <property name="text">
+            <string>Compare results to filenames</string>
+           </property>
+           <property name="toolTip">
+            <string>When checked, the recognised identifier of each batch image is compared to the source file's stem. An accuracy summary is logged after batch completes.</string>
+           </property>
+           <property name="checked">
+            <bool>false</bool>
+           </property>
+          </widget>
+         </item>
+
+        </layout>
+       </widget>
+      </item>
+
+     </layout>
+    </widget>
+   </item>
+
+   <!-- Process area -->
+   <item>
+    <widget class="QFrame" name="process_area_frame">
+     <property name="frameShape">
+      <enum>QFrame::Shape::NoFrame</enum>
+     </property>
+     <property name="frameShadow">
+      <enum>QFrame::Shadow::Plain</enum>
+     </property>
+     <property name="sizePolicy">
+      <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+       <horstretch>0</horstretch>
+       <verstretch>1</verstretch>
+      </sizepolicy>
+     </property>
+     <layout class="QVBoxLayout" name="process_area_layout">
+      <property name="spacing">
+       <number>0</number>
+      </property>
+      <property name="leftMargin">
+       <number>0</number>
+      </property>
+      <property name="topMargin">
+       <number>0</number>
+      </property>
+      <property name="rightMargin">
+       <number>0</number>
+      </property>
+      <property name="bottomMargin">
+       <number>0</number>
+      </property>
+      <item>
+       <widget class="QLabel" name="process_placeholder_label">
+        <property name="text">
+         <string>Select a folder and press Start to begin.</string>
+        </property>
+        <property name="alignment">
+         <set>Qt::AlignmentFlag::AlignCenter</set>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+
+  </layout>
+ </widget>
+</ui>

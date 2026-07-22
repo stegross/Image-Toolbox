@@ -61,10 +61,10 @@ class TestToolRegistryRegister:
     """Tests for ToolRegistry.register."""
 
     def test_register_adds_tool(self) -> None:
-        """Registered tool is retrievable by name."""
+        """Registered tool is retrievable by class name."""
         ToolRegistry.register(_ToolA)
         registry = ToolRegistry()
-        assert registry.get_tool("Tool A") is _ToolA
+        assert registry.get_tool("_ToolA") is _ToolA
 
     def test_register_duplicate_raises(self) -> None:
         """Re-registering a tool with the same name raises ValueError."""
@@ -77,8 +77,8 @@ class TestToolRegistryRegister:
         ToolRegistry.register(_ToolA)
         ToolRegistry.register(_ToolB)
         registry = ToolRegistry()
-        assert registry.get_tool("Tool A") is _ToolA
-        assert registry.get_tool("Tool B") is _ToolB
+        assert registry.get_tool("_ToolA") is _ToolA
+        assert registry.get_tool("_ToolB") is _ToolB
 
 
 class TestToolRegistryQuery:

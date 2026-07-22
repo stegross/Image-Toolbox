@@ -1,9 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('app/shell/ui/main_window.ui', 'app/shell/ui'), ('app/tools/identification_tool/tool.ui', 'app/tools/identification_tool')]
+datas = [('app/shell/ui/main_window.ui', 'app/shell/ui'), ('app/tools/scibit/tool.ui', 'app/tools/scibit')]
 binaries = []
-hiddenimports = ['app.tools.identification_tool.ocr.paddleocr_engine', 'app.tools.identification_tool.ocr.easyocr_engine', 'app.tools.identification_tool.ocr.tesseract']
+hiddenimports = []
 tmp_ret = collect_all('paddleocr')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('paddlex')

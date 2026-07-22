@@ -1,0 +1,46 @@
+{
+  "pipeline": "direct_roi",
+  "pipeline_options": {
+    "identifier_pattern_preset": "Two uppercase letters + 2 digits (AA01, XD12, ZZ99)",
+    "manual_confirmation_required": true,
+    "confidence_threshold_percent": 85.0,
+    "debug_export_mode": "disabled"
+  },
+  "stages": {
+    "calibration_setup": {
+      "operator": "",
+      "parameters": {
+        "rotation_degrees": -90.0,
+        "invert_colors": true,
+        "downscale_factor": 30
+      }
+    },
+    "identifier_region_selection": {
+      "operator": "",
+      "parameters": {
+        "roi_tolerance_margin": 5
+      }
+    },
+    "roi_preprocess": {
+      "operator": "OpenCVOperator",
+      "parameters": {
+        "clahe_enabled": true,
+        "clahe_clip_limit": 6.0,
+        "clahe_tile_grid_size": 1,
+        "adaptive_threshold_enabled": false,
+        "adaptive_threshold_method": "GAUSSIAN",
+        "adaptive_threshold_block_size": 11,
+        "adaptive_threshold_c": 2,
+        "adaptive_threshold_invert": false
+      }
+    },
+    "text_recognition": {
+      "operator": "PaddleOCROperator",
+      "parameters": {}
+    },
+    "validation": {
+      "operator": "",
+      "parameters": {}
+    }
+  }
+}
