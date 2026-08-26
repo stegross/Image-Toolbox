@@ -65,6 +65,10 @@ class SessionConfig:
     last_pipeline_config_name : str | None
         Name of the last selected pipeline configuration (file stem), or
         ``None`` if none was selected.
+    last_pipeline_config_bundled : bool
+        Whether the last selected config was the bundled (``True``) or
+        user (``False``) version.  Only meaningful when
+        ``last_pipeline_config_name`` is not ``None``.
     test_mode : bool
         When ``True``, batch completion compares each recognised identifier
         against the source filename's stem and logs an accuracy summary.
@@ -72,6 +76,7 @@ class SessionConfig:
 
     last_folder: Path | None = None
     last_pipeline_config_name: str | None = None
+    last_pipeline_config_bundled: bool = False
     test_mode: bool = False
 
     # ------------------------------------------------------------------
@@ -135,6 +140,7 @@ class SessionConfig:
         return {
             "last_folder": str(self.last_folder) if self.last_folder else None,
             "last_pipeline_config_name": self.last_pipeline_config_name,
+            "last_pipeline_config_bundled": self.last_pipeline_config_bundled,
             "test_mode": self.test_mode,
         }
 
@@ -145,6 +151,7 @@ class SessionConfig:
         return cls(
             last_folder=Path(folder_raw) if folder_raw else None,
             last_pipeline_config_name=data.get("last_pipeline_config_name"),
+            last_pipeline_config_bundled=bool(data.get("last_pipeline_config_bundled", False)),
             test_mode=bool(data.get("test_mode", False)),
         )
 
@@ -333,6 +340,51 @@ class Configuration:
     # ------------------------------------------------------------------
 
     @classmethod
+    def from_dict(cls, data: dict, name: str) -> Configuration:
+        """Construct a configuration from a parsed JSON dict.
+
+        Shared parsing logic used by both :meth:`load` (file path) and
+        the bundled-config store (in-memory dict).
+
+        Parameters
+        ----------
+        data : dict
+            Parsed JSON dict following the pipeline configuration schema
+            (spec Section 5).
+        name : str
+            Human-readable name (typically the file stem or bundle key).
+
+        Returns
+        -------
+        Configuration
+            Populated configuration instance.
+
+        Raises
+        ------
+        ValueError
+            If the ``"pipeline"`` key is absent or a stage config is
+            malformed.
+        """
+        if "pipeline" not in data:
+            raise ValueError(f"Configuration '{name}' is missing the required 'pipeline' key.")
+
+        stages: dict[str, StageConfig] = {}
+        for stage_name, stage_data in data.get("stages", {}).items():
+            try:
+                stages[stage_name] = StageConfig.from_dict(stage_data)
+            except (KeyError, TypeError) as exc:
+                raise ValueError(
+                    f"Malformed stage config '{stage_name}' in '{name}': {exc}"
+                ) from exc
+
+        return cls(
+            pipeline=str(data["pipeline"]),
+            pipeline_options=PipelineOptions.from_dict(data.get("pipeline_options", {})),
+            stages=stages,
+            name=name,
+        )
+
+    @classmethod
     def load(cls, path: Path) -> Configuration:
         """Load a configuration from the JSON file at *path*.
 
@@ -360,22 +412,7 @@ class Configuration:
             except json.JSONDecodeError as exc:
                 raise ValueError(f"Invalid JSON in configuration file {path}: {exc}") from exc
 
-        if "pipeline" not in data:
-            raise ValueError(f"Configuration file {path} is missing the required 'pipeline' key.")
-
-        stages: dict[str, StageConfig] = {}
-        for stage_name, stage_data in data.get("stages", {}).items():
-            try:
-                stages[stage_name] = StageConfig.from_dict(stage_data)
-            except (KeyError, TypeError) as exc:
-                raise ValueError(f"Malformed stage config '{stage_name}' in {path}: {exc}") from exc
-
-        return cls(
-            pipeline=str(data["pipeline"]),
-            pipeline_options=PipelineOptions.from_dict(data.get("pipeline_options", {})),
-            stages=stages,
-            name=path.stem,
-        )
+        return cls.from_dict(data, name=path.stem)
 
 
 # ---------------------------------------------------------------------------
@@ -384,159 +421,199 @@ class Configuration:
 
 
 class PipelineConfigStore:
-    """Manages a directory of saved pipeline configuration files.
+    """Manages a dual-location store for pipeline configs.
 
-    Each file in *config_dir* whose name ends in ``.json`` is treated as a
-    saved pipeline configuration.  The store provides listing, loading,
-    saving, and deletion of named configurations.
-
-    The store is typically pointed at a tool-specific subdirectory inside
-    the host shell's config directory::
-
-        store = PipelineConfigStore.from_config_manager(config_manager)
-
-    Parameters
-    ----------
-    config_dir : Path
-        Directory that contains (or will contain) pipeline configuration
-        JSON files.  Created on first write if it does not yet exist.
+    Bundled configs (embedded in the EXE) are provided as an in-memory
+    dict and are read-only.  User configs (in the user profile) are
+    read-write and can override bundled configs of the same name.
     """
 
-    def __init__(self, config_dir: Path) -> None:
-        self._config_dir = config_dir
+    def __init__(
+        self,
+        bundled_configs: dict[str, dict],
+        user_dir: Path,
+    ) -> None:
+        """Initialize dual-location store.
+
+        Args:
+            bundled_configs: Mapping of bundled config name -> parsed
+                JSON dict (embedded in EXE, read-only).
+            user_dir: Directory for user-created configs (read-write).
+        """
+        self._bundled_configs = dict(bundled_configs)
+        self._user_dir = user_dir
 
     # ------------------------------------------------------------------
     # Factory
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_config_manager(
-        cls,
-        config_manager: ConfigManager,
-    ) -> PipelineConfigStore:
-        """Construct a store rooted at the ConfigManager's config directory.
+    def from_config_roots(cls, user_config_dir: Path) -> PipelineConfigStore:
+        """Construct from the user config directory, loading bundled configs.
 
-        The store lives in a ``scibit_configs/`` sub-directory alongside the
-        other tool config files.
+        Bundled configs are loaded via :mod:`app.core.resources` (from
+        the embedded module in a frozen build, or from the dev JSON
+        files when running from source).
 
-        Parameters
-        ----------
-        config_manager : ConfigManager
-            Host shell configuration manager instance.
+        Args:
+            user_config_dir: User profile config directory.
 
         Returns
         -------
-        PipelineConfigStore
-            Store ready for use.
+            PipelineConfigStore instance with embedded bundled configs.
         """
-        # ConfigManager stores the config_dir reference on ``_config_dir``.
-        # We read it via the private attribute because ConfigManager has no
-        # public accessor for the directory path.
-        config_dir: Path = config_manager._config_dir / _PIPELINE_CONFIGS_SUBDIR  # type: ignore[attr-defined]
-        return cls(config_dir)
+        from app.core.resources import load_bundled_pipeline_configs
+
+        bundled = load_bundled_pipeline_configs()
+        user_configs = user_config_dir / "scibit_configs"
+        return cls(bundled_configs=bundled, user_dir=user_configs)
+
+    @classmethod
+    def from_directories(cls, deployment_dir: Path, user_dir: Path) -> PipelineConfigStore:
+        """Construct by reading bundled configs from a directory on disk.
+
+        Used by tests that provide their own bundled config files via
+        ``tmp_path`` rather than the real embedded module.
+
+        Args:
+            deployment_dir: Directory containing bundled ``*.json`` configs.
+            user_dir: Directory for user-created configs.
+
+        Returns
+        -------
+            PipelineConfigStore instance with configs loaded from disk.
+        """
+        bundled: dict[str, dict] = {}
+        for path in sorted(deployment_dir.glob("*.json")):
+            with path.open(encoding="utf-8") as fh:
+                bundled[path.stem] = json.load(fh)
+        return cls(bundled_configs=bundled, user_dir=user_dir)
 
     # ------------------------------------------------------------------
     # Queries
     # ------------------------------------------------------------------
 
     def list_configs(self) -> list[str]:
-        """Return the names of all saved configurations (file stems).
+        """Return all config names from both bundled and user locations.
 
         Returns
         -------
-        list[str]
-            Configuration names sorted alphabetically.  Empty list if the
-            directory does not exist or contains no ``.json`` files.
+            Configuration names sorted alphabetically (deduplicated —
+            if a user override shares a name with a bundled config, only
+            one entry appears).  Use :meth:`list_config_entries` when you
+            need to enumerate both versions separately.
         """
-        if not self._config_dir.exists():
-            return []
-        return sorted(p.stem for p in self._config_dir.glob("*.json") if p.is_file())
+        bundled = set(self._bundled_configs.keys())
+        user = {p.stem for p in self._user_dir.glob("*.json")}
+        return sorted(bundled | user)
 
-    def load_config(self, name: str) -> Configuration:
-        """Load and return the named configuration.
+    def list_config_entries(self) -> list[tuple[str, bool]]:
+        """Return ``(name, is_bundled)`` for every config, without deduplication.
 
-        Parameters
-        ----------
-        name : str
-            Configuration name (file stem, without ``.json`` extension).
+        Bundled configs are listed first (alphabetically), then user
+        configs (alphabetically).  When a user creates a config with the
+        same name as a bundled one, **both** entries appear — the bundled
+        one with ``is_bundled=True`` and the user one with
+        ``is_bundled=False``.
 
         Returns
         -------
-        Configuration
-            The loaded configuration.
+            List of ``(name, is_bundled)`` tuples.
+        """
+        bundled = sorted(self._bundled_configs.keys())
+        user = sorted({p.stem for p in self._user_dir.glob("*.json")})
+        return [(n, True) for n in bundled] + [(n, False) for n in user]
+
+    def load_config(self, name: str, *, bundled: bool = False) -> Configuration:
+        """Load config from the user location (default) or the bundle.
+
+        By default (``bundled=False``) the user version takes precedence
+        over a bundled config of the same name.  Pass ``bundled=True`` to
+        load the bundled version even when a user override exists.
+
+        Args:
+            name: Configuration name (file stem).
+            bundled: If ``True``, load from the bundle, ignoring any user
+                override.
+
+        Returns
+        -------
+            Loaded configuration instance.
 
         Raises
         ------
-        FileNotFoundError
-            If no configuration with *name* exists.
-        ValueError
-            If the file is malformed.
+            FileNotFoundError: If config doesn't exist in the requested
+                location.
         """
-        path = self._path_for(name)
-        if not path.exists():
-            raise FileNotFoundError(
-                f"No pipeline configuration named '{name}' found in {self._config_dir}."
-            )
-        return Configuration.load(path)
+        if not bundled:
+            user_path = self._user_dir / f"{name}.json"
+            if user_path.exists():
+                return Configuration.load(user_path)
+
+        if name in self._bundled_configs:
+            return Configuration.from_dict(self._bundled_configs[name], name=name)
+
+        raise FileNotFoundError(
+            f"No pipeline configuration named '{name}' found in "
+            f"bundled configs ({sorted(self._bundled_configs)}) or "
+            f"user directory ({self._user_dir})."
+        )
 
     def config_exists(self, name: str) -> bool:
-        """Return ``True`` if a configuration with *name* exists on disk."""
-        return self._path_for(name).exists()
+        """Check if config exists in either bundled or user location."""
+        user_path = self._user_dir / f"{name}.json"
+        return user_path.exists() or name in self._bundled_configs
+
+    def is_bundled_config(self, name: str) -> bool:
+        """Check if a config with this name exists in the bundle.
+
+        Returns ``True`` regardless of whether a user override also
+        exists — use :meth:`list_config_entries` to enumerate both
+        versions separately.
+        """
+        return name in self._bundled_configs
 
     # ------------------------------------------------------------------
     # Mutations
     # ------------------------------------------------------------------
 
     def save_config(self, config: Configuration) -> None:
-        """Save *config* to disk, creating the directory if needed.
+        """Save config to user location only (never to deployment).
 
-        The file is named ``<config.name>.json``.  Any characters in
-        ``config.name`` that are illegal in file names are replaced with
-        underscores before writing.
-
-        Parameters
-        ----------
-        config : Configuration
-            Configuration to persist.
+        Args:
+            config: Configuration to save.
 
         Raises
         ------
-        OSError
-            If the file cannot be written.
+            OSError: If the file cannot be written.
         """
-        self._config_dir.mkdir(parents=True, exist_ok=True)
+        self._user_dir.mkdir(parents=True, exist_ok=True)
         safe_name = _sanitise_filename(config.name)
-        path = self._config_dir / f"{safe_name}.json"
+        path = self._user_dir / f"{safe_name}.json"
         config.save(path)
-        _log.debug("Saved pipeline config '%s' to %s.", config.name, path)
+        _log.debug("Saved user pipeline config '%s' to %s.", config.name, path)
 
     def delete_config(self, name: str) -> bool:
-        """Delete the named configuration file.
+        """Delete config from user location.
 
-        Parameters
-        ----------
-        name : str
-            Configuration name (file stem).
+        Args:
+            name: Configuration name (file stem).
 
         Returns
         -------
-        bool
-            ``True`` if the file existed and was deleted, ``False`` if it
-            was not found (no error is raised in that case).
+            True if deleted, False if not found.
         """
-        path = self._path_for(name)
+        path = self._user_dir / f"{name}.json"
         if not path.exists():
             return False
         path.unlink()
-        _log.debug("Deleted pipeline config '%s' (%s).", name, path)
+        _log.debug("Deleted user pipeline config '%s' (%s).", name, path)
         return True
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
-    def _path_for(self, name: str) -> Path:
-        return self._config_dir / f"{_sanitise_filename(name)}.json"
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
 
 
 def _sanitise_filename(name: str) -> str:

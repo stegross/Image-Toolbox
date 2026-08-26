@@ -127,6 +127,35 @@ nox -s build-local   # build a portable distribution locally
 - **Testing:** pytest with pytest-qt (`qt_api = pyside6`).
 - **Docs:** Sphinx + Furo; API reference under `docs/`.
 
+### SCIBIT bundled configs
+
+SCIBIT ships with bundled pipeline configs (e.g. `GPD`, `LASSIC`) and regex
+presets that appear with a **(bundled)** prefix in the identification-config
+dropdown. These configs are **read-only** in the deployed EXE — they are
+compiled into the PYZ archive and cannot be modified by end users.
+
+The developer ground truth is the set of JSON files under
+`app/tools/scibit/packaged_configs/` (`pipeline_configs/*.json` and
+`scibit_regex_presets.json`). The runtime loader (`app/core/resources.py`)
+branches on `sys.frozen`:
+
+| Mode | Source | Effect |
+|------|--------|--------|
+| **Dev** (`python -m app`) | JSON files read **directly from disk** | Edits to the JSON files are visible on the next launch — no regeneration needed. The generated module `_bundled_configs.py` is **not** consulted. |
+| **Frozen** (PyInstaller EXE) | Python module `_bundled_configs.py` (compiled into the PYZ archive) | The JSON files are not shipped; only the generated module is embedded. |
+
+`_bundled_configs.py` is produced at build time by
+`app/tools/scibit/_generate_bundled_configs.py` (a gitignored build
+artifact). The `nox -s build-local` session runs this generator before
+PyInstaller so the EXE always reflects the current JSON files.
+
+> **When editing bundled configs:** change the JSON files under
+> `packaged_configs/` and verify in dev mode. You do **not** need to
+> regenerate `_bundled_configs.py` manually — `build-local` does it
+> automatically. If you run PyInstaller without nox, run the generator
+> first or the EXE will ship stale data:
+> `python -m app.tools.scibit._generate_bundled_configs`.
+
 ## Documentation
 
 API documentation is generated with Sphinx. Build it with `nox -s docs` and open

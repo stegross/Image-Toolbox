@@ -26,6 +26,8 @@ build/
 
 # AI
 .claude/
+session-ses_*.md
+
 
 # Generated documentation
 docs/_build/
@@ -33,6 +35,9 @@ docs/api/
 
 # Misc
 .cache/
+
+# Generated bundled configs (build artifact)
+app/tools/scibit/_bundled_configs.py
 
 # Excel Temps
 ~$*

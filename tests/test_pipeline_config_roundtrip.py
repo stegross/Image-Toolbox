@@ -159,19 +159,19 @@ class TestPipelineConfigStore:
 
     def test_list_empty_directory(self, tmp_path: Path) -> None:
         """A nonexistent or empty directory yields an empty list."""
-        store = PipelineConfigStore(tmp_path / "scibit_configs")
+        store = PipelineConfigStore.from_directories(tmp_path / "deploy", tmp_path / "user")
         assert store.list_configs() == []
 
     def test_save_and_list(self, tmp_path: Path) -> None:
         """Saved configurations appear under their stem in ``list_configs``."""
-        store = PipelineConfigStore(tmp_path / "scibit_configs")
+        store = PipelineConfigStore.from_directories(tmp_path / "deploy", tmp_path / "user")
         store.save_config(_build_sample_configuration(name="alpha"))
         store.save_config(_build_sample_configuration(name="bravo"))
         assert store.list_configs() == ["alpha", "bravo"]
 
     def test_save_then_load_roundtrip(self, tmp_path: Path) -> None:
         """``load_config`` returns a Configuration equal to the saved one."""
-        store = PipelineConfigStore(tmp_path / "scibit_configs")
+        store = PipelineConfigStore.from_directories(tmp_path / "deploy", tmp_path / "user")
         original = _build_sample_configuration(name="alpha")
         store.save_config(original)
         loaded = store.load_config("alpha")
@@ -179,7 +179,7 @@ class TestPipelineConfigStore:
 
     def test_delete_removes_file_and_returns_true(self, tmp_path: Path) -> None:
         """``delete_config`` removes the file and reports success."""
-        store = PipelineConfigStore(tmp_path / "scibit_configs")
+        store = PipelineConfigStore.from_directories(tmp_path / "deploy", tmp_path / "user")
         store.save_config(_build_sample_configuration(name="alpha"))
         assert store.delete_config("alpha") is True
         assert not store.config_exists("alpha")
@@ -187,11 +187,131 @@ class TestPipelineConfigStore:
 
     def test_delete_unknown_returns_false(self, tmp_path: Path) -> None:
         """Deleting a missing configuration is a no-op returning ``False``."""
-        store = PipelineConfigStore(tmp_path / "scibit_configs")
+        store = PipelineConfigStore.from_directories(tmp_path / "deploy", tmp_path / "user")
         assert store.delete_config("does_not_exist") is False
 
     def test_load_unknown_raises(self, tmp_path: Path) -> None:
         """``load_config`` raises FileNotFoundError for an unknown name."""
-        store = PipelineConfigStore(tmp_path / "scibit_configs")
+        store = PipelineConfigStore.from_directories(tmp_path / "deploy", tmp_path / "user")
         with pytest.raises(FileNotFoundError):
             store.load_config("missing")
+
+
+# ---------------------------------------------------------------------------
+# PipelineConfigStore — bundled vs user override behaviour
+# ---------------------------------------------------------------------------
+
+
+class TestPipelineConfigStoreBundled:
+    """Bundled (embedded) configs are read-only; user files override them."""
+
+    def test_bundled_config_listed_and_loaded(self, tmp_path: Path) -> None:
+        """A config in the deployment dir appears in the list and loads."""
+        deploy = tmp_path / "deploy"
+        deploy.mkdir()
+        bundled = _build_sample_configuration(name="GPD")
+        bundled.save(deploy / "GPD.json")
+
+        store = PipelineConfigStore.from_directories(deploy, tmp_path / "user")
+
+        assert "GPD" in store.list_configs()
+        assert store.is_bundled_config("GPD") is True
+        loaded = store.load_config("GPD")
+        assert loaded.pipeline == bundled.pipeline
+
+    def test_user_override_takes_precedence(self, tmp_path: Path) -> None:
+        """A user file with the same name shadows the bundled config on load.
+
+        ``is_bundled_config`` still reports ``True`` (membership-only
+        check), but ``load_config`` returns the user version by default.
+        Pass ``bundled=True`` to load the bundled copy.
+        """
+        deploy = tmp_path / "deploy"
+        deploy.mkdir()
+        user = tmp_path / "user"
+        user.mkdir()
+
+        bundled = _build_sample_configuration(name="GPD")
+        bundled.save(deploy / "GPD.json")
+
+        override = Configuration(
+            pipeline="direct_roi",
+            pipeline_options=PipelineOptions(),
+            stages={},
+            name="GPD",
+        )
+        override.save(user / "GPD.json")
+
+        store = PipelineConfigStore.from_directories(deploy, user)
+
+        assert "GPD" in store.list_configs()
+        assert store.is_bundled_config("GPD") is True
+        # Default load returns the user override.
+        loaded = store.load_config("GPD")
+        assert loaded == override
+        # Explicit bundled=True returns the bundled copy.
+        loaded_bundled = store.load_config("GPD", bundled=True)
+        assert loaded_bundled == bundled
+
+    def test_list_config_entries_separates_bundled_and_user(self, tmp_path: Path) -> None:
+        """``list_config_entries`` lists both versions of a same-name config."""
+        deploy = tmp_path / "deploy"
+        deploy.mkdir()
+        user = tmp_path / "user"
+        user.mkdir()
+
+        bundled = _build_sample_configuration(name="GPD")
+        bundled.save(deploy / "GPD.json")
+        user_cfg = _build_sample_configuration(name="custom")
+        store = PipelineConfigStore.from_directories(deploy, user)
+        store.save_config(user_cfg)
+
+        entries = store.list_config_entries()
+        assert ("GPD", True) in entries
+        assert ("custom", False) in entries
+
+    def test_list_config_entries_dual_entry_for_same_name(self, tmp_path: Path) -> None:
+        """Both bundled and user entries appear when names collide."""
+        deploy = tmp_path / "deploy"
+        deploy.mkdir()
+        user = tmp_path / "user"
+        user.mkdir()
+
+        bundled = _build_sample_configuration(name="GPD")
+        bundled.save(deploy / "GPD.json")
+        store = PipelineConfigStore.from_directories(deploy, user)
+        store.save_config(_build_sample_configuration(name="GPD"))
+
+        entries = store.list_config_entries()
+        assert entries.count(("GPD", True)) == 1
+        assert entries.count(("GPD", False)) == 1
+
+    def test_load_config_bundled_flag(self, tmp_path: Path) -> None:
+        """``load_config(bundled=True)`` loads bundled even with user override."""
+        deploy = tmp_path / "deploy"
+        deploy.mkdir()
+        user = tmp_path / "user"
+        user.mkdir()
+
+        bundled = _build_sample_configuration(name="GPD")
+        bundled.save(deploy / "GPD.json")
+        override = Configuration(
+            pipeline="direct_roi",
+            pipeline_options=PipelineOptions(),
+            stages={},
+            name="GPD",
+        )
+        override.save(user / "GPD.json")
+
+        store = PipelineConfigStore.from_directories(deploy, user)
+
+        assert store.load_config("GPD", bundled=True) == bundled
+        assert store.load_config("GPD", bundled=False) == override
+        # Default is bundled=False (user precedence).
+        assert store.load_config("GPD") == override
+
+    def test_is_bundled_false_for_user_only(self, tmp_path: Path) -> None:
+        """``is_bundled_config`` is False for a user-only config."""
+        store = PipelineConfigStore.from_directories(tmp_path / "deploy", tmp_path / "user")
+        store.save_config(_build_sample_configuration(name="custom"))
+        assert store.is_bundled_config("custom") is False

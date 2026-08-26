@@ -10,7 +10,6 @@ Spec references: Sections 3.7 (session persistence), 3.10 (UI architecture),
 from __future__ import annotations
 
 import logging
-import shutil
 import time
 from abc import ABCMeta
 from pathlib import Path
@@ -58,10 +57,28 @@ _log = logging.getLogger("vi_toolbox.tools.scibit")
 
 _SUPPORTED_EXTENSIONS: frozenset[str] = frozenset({".jpg", ".jpeg", ".png"})
 
-_PRESETS_FILENAME = "scibit_presets.json"
-_BUNDLED_DEFAULT_PRESETS_PATH = Path(__file__).parent / "scibit_presets.default.json"
-
 _NO_IDENTIFICATION_CONFIG = "— None —"
+
+# Prefixes used in the identification-config combo box display text.
+_BUNDLED_PREFIX = "(bundled)"
+_CHANGED_PREFIX = "(changed)"
+
+
+def _config_display_text(name: str, is_bundled: bool, is_dirty: bool = False) -> str:
+    """Build the combo-box display text for a config entry.
+
+    The ``(changed)`` prefix is always first (it refers to the live form
+    state), followed by ``(bundled)`` (refers to the config source),
+    then the canonical name.
+    """
+    parts: list[str] = []
+    if is_dirty:
+        parts.append(_CHANGED_PREFIX)
+    if is_bundled:
+        parts.append(_BUNDLED_PREFIX)
+    parts.append(name)
+    return " ".join(parts)
+
 
 _DEBUG_MODE_VALUES = [
     DebugExportMode.DISABLED,
@@ -132,6 +149,10 @@ class Scibit(QWidget, IToolPlugin, metaclass=_ToolMeta):
     ----------
     config_manager : ConfigManager
         Application-wide config manager for session persistence.
+    deployment_root : Path
+        Root directory for embedded configs (packaged_configs folder).
+    user_config_dir : Path
+        User profile config directory.
     parent : QWidget | None
         Optional Qt parent.
     """
@@ -151,12 +172,16 @@ class Scibit(QWidget, IToolPlugin, metaclass=_ToolMeta):
     def __init__(
         self,
         config_manager: ConfigManager,
+        user_config_dir: Path,
         parent: QWidget | None = None,
     ) -> None:
         QWidget.__init__(self, parent)
 
         self._config_manager = config_manager
-        self._config_store = PipelineConfigStore.from_config_manager(config_manager)
+        self._user_config_dir = user_config_dir
+        self._config_store = PipelineConfigStore.from_config_roots(
+            user_config_dir=user_config_dir,
+        )
         self._preset_registry = self._load_preset_registry()
 
         self._folder: Path | None = None
@@ -176,6 +201,7 @@ class Scibit(QWidget, IToolPlugin, metaclass=_ToolMeta):
         # during calibration via the "(changed)" indicator.
         self._loaded_config: Configuration | None = None
         self._loaded_config_name: str | None = None
+        self._loaded_config_bundled: bool = False
         self._loaded_config_snapshot: dict | None = None
         self._dirty: bool = False
         # Set while applying a loaded config to widgets so the cascading
@@ -339,17 +365,29 @@ class Scibit(QWidget, IToolPlugin, metaclass=_ToolMeta):
 
     def _populate_combos(self) -> None:
         # Identification config combo: sentinel + saved configs.  Each saved
-        # entry stores its canonical name in UserRole data so the displayed
-        # text can carry a "(changed)" prefix without polluting save paths.
+        # entry stores a ``(name, is_bundled)`` tuple in UserRole data so the
+        # displayed text can carry "(bundled)" / "(changed)" prefixes without
+        # polluting save paths, and the loader knows which source to read.
         if self._identification_config_combo:
             self._identification_config_combo.blockSignals(True)
             self._identification_config_combo.clear()
             self._identification_config_combo.addItem(_NO_IDENTIFICATION_CONFIG)
             self._identification_config_combo.setItemData(0, None, Qt.ItemDataRole.UserRole)
-            for name in self._config_store.list_configs():
-                self._identification_config_combo.addItem(name)
+            for name, is_bundled in self._config_store.list_config_entries():
+                display_name = _config_display_text(name, is_bundled)
+                tooltip = (
+                    "Bundled configuration (read-only, cannot be edited)"
+                    if is_bundled
+                    else "User configuration"
+                )
+                self._identification_config_combo.addItem(display_name)
                 idx = self._identification_config_combo.count() - 1
-                self._identification_config_combo.setItemData(idx, name, Qt.ItemDataRole.UserRole)
+                self._identification_config_combo.setItemData(
+                    idx, (name, is_bundled), Qt.ItemDataRole.UserRole
+                )
+                self._identification_config_combo.setItemData(
+                    idx, tooltip, Qt.ItemDataRole.ToolTipRole
+                )
             self._identification_config_combo.blockSignals(False)
 
         # Pipeline combo: discovered from Pipeline.__subclasses__(). The
@@ -383,15 +421,18 @@ class Scibit(QWidget, IToolPlugin, metaclass=_ToolMeta):
     # ------------------------------------------------------------------
 
     def _load_preset_registry(self) -> IdentifierPatternPresetRegistry:
-        presets_path = self._config_manager._config_dir / _PRESETS_FILENAME  # type: ignore[attr-defined]
-        if not presets_path.exists() and _BUNDLED_DEFAULT_PRESETS_PATH.exists():
-            try:
-                presets_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(_BUNDLED_DEFAULT_PRESETS_PATH, presets_path)
-                _log.info("Seeded preset file from bundled defaults: %s", presets_path)
-            except OSError as exc:
-                _log.warning("Could not seed bundled preset defaults: %s", exc)
-        return IdentifierPatternPresetRegistry.load(presets_path)
+        """Load presets from embedded resource.
+
+        Returns
+        -------
+            Registry with presets from the bundled scibit_regex_presets
+            data (embedded in the EXE in a frozen build, or read from
+            the dev JSON file when running from source).
+        """
+        from app.core.resources import load_bundled_presets_data
+
+        presets_data = load_bundled_presets_data()
+        return IdentifierPatternPresetRegistry.from_data(presets_data)
 
     def _restore_session(self) -> None:
         session = SessionConfig.load(self._config_manager)
@@ -402,15 +443,18 @@ class Scibit(QWidget, IToolPlugin, metaclass=_ToolMeta):
             self._test_mode_check.toggled.connect(lambda _checked: self._save_session())
 
         last_name = session.last_pipeline_config_name
+        last_bundled = session.last_pipeline_config_bundled
         if (
             last_name
             and self._identification_config_combo
             and self._config_store.config_exists(last_name)
         ):
-            idx = self._identification_config_combo.findData(last_name, Qt.ItemDataRole.UserRole)
-            if idx >= 0:
-                self._identification_config_combo.setCurrentIndex(idx)
-                return
+            target = (last_name, last_bundled)
+            for i in range(self._identification_config_combo.count()):
+                data = self._identification_config_combo.itemData(i, Qt.ItemDataRole.UserRole)
+                if data == target:
+                    self._identification_config_combo.setCurrentIndex(i)
+                    return
 
         # First launch, missing config, or unknown name → seed form with
         # PipelineOptions defaults and leave the combo on "— None —".
@@ -423,6 +467,7 @@ class Scibit(QWidget, IToolPlugin, metaclass=_ToolMeta):
         session = SessionConfig(
             last_folder=self._folder,
             last_pipeline_config_name=self._loaded_config_name,
+            last_pipeline_config_bundled=self._loaded_config_bundled,
             test_mode=test_mode,
         )
         session.save(self._config_manager)
@@ -502,25 +547,35 @@ class Scibit(QWidget, IToolPlugin, metaclass=_ToolMeta):
         """Load a saved identification config and apply all its settings to the form."""
         if not self._identification_config_combo or index < 0:
             return
-        name = self._identification_config_combo.itemData(index, Qt.ItemDataRole.UserRole)
-        if not name:
+        # Switching away discards any unsaved edits, so clear the previous
+        # config's "(changed)" prefix before loading the new one.  Must
+        # happen before self._loaded_config_name is overwritten below.
+        if self._loaded_config_name is not None:
+            self._set_config_item_display(
+                self._loaded_config_name, self._loaded_config_bundled, is_dirty=False
+            )
+        entry = self._identification_config_combo.itemData(index, Qt.ItemDataRole.UserRole)
+        if not entry:
             # "— None —" sentinel: drop loaded state but leave form values
             # alone so any in-progress edits are not lost.
             self._loaded_config = None
             self._loaded_config_name = None
+            self._loaded_config_bundled = False
             self._loaded_config_snapshot = None
             self._dirty = False
             self._save_session()
             return
 
+        name, is_bundled = entry
         try:
-            config = self._config_store.load_config(name)
+            config = self._config_store.load_config(name, bundled=is_bundled)
         except (FileNotFoundError, ValueError) as exc:
             _log.warning("Could not load identification config '%s': %s", name, exc)
             return
 
         self._loaded_config = config
         self._loaded_config_name = name
+        self._loaded_config_bundled = is_bundled
         self._loaded_config_snapshot = config.to_dict()
         self._dirty = False
         self._update_changed_indicator()
@@ -564,10 +619,11 @@ class Scibit(QWidget, IToolPlugin, metaclass=_ToolMeta):
         # Refresh snapshot to the just-saved state and clear "(changed)".
         self._loaded_config = config
         self._loaded_config_name = name
+        self._loaded_config_bundled = False
         self._loaded_config_snapshot = config.to_dict()
         self._dirty = False
 
-        self._refresh_identification_config_combo(select=name)
+        self._refresh_identification_config_combo(select=name, select_bundled=False)
         self._update_changed_indicator()
         self._save_session()
 
@@ -813,13 +869,19 @@ class Scibit(QWidget, IToolPlugin, metaclass=_ToolMeta):
         registered = Pipeline.__subclasses__()
         return registered[0].PIPELINE_ID if registered else ""
 
-    def _refresh_identification_config_combo(self, select: str | None = None) -> None:
+    def _refresh_identification_config_combo(
+        self, select: str | None = None, *, select_bundled: bool = False
+    ) -> None:
         """Repopulate the identification config combo from disk.
 
         Parameters
         ----------
         select : str | None
             If given, selects the item whose canonical name matches.
+        select_bundled : bool
+            When ``select`` is given, disambiguates between a bundled and
+            user entry of the same name.  ``False`` (default) selects the
+            user version; ``True`` selects the bundled version.
         """
         if not self._identification_config_combo:
             return
@@ -827,14 +889,26 @@ class Scibit(QWidget, IToolPlugin, metaclass=_ToolMeta):
         self._identification_config_combo.clear()
         self._identification_config_combo.addItem(_NO_IDENTIFICATION_CONFIG)
         self._identification_config_combo.setItemData(0, None, Qt.ItemDataRole.UserRole)
-        for name in self._config_store.list_configs():
-            self._identification_config_combo.addItem(name)
+        for name, is_bundled in self._config_store.list_config_entries():
+            display_name = _config_display_text(name, is_bundled)
+            tooltip = (
+                "Bundled configuration (read-only, cannot be edited)"
+                if is_bundled
+                else "User configuration"
+            )
+            self._identification_config_combo.addItem(display_name)
             idx = self._identification_config_combo.count() - 1
-            self._identification_config_combo.setItemData(idx, name, Qt.ItemDataRole.UserRole)
+            self._identification_config_combo.setItemData(
+                idx, (name, is_bundled), Qt.ItemDataRole.UserRole
+            )
+            self._identification_config_combo.setItemData(idx, tooltip, Qt.ItemDataRole.ToolTipRole)
         if select:
-            idx = self._identification_config_combo.findData(select, Qt.ItemDataRole.UserRole)
-            if idx >= 0:
-                self._identification_config_combo.setCurrentIndex(idx)
+            target = (select, select_bundled)
+            for i in range(1, self._identification_config_combo.count()):
+                data = self._identification_config_combo.itemData(i, Qt.ItemDataRole.UserRole)
+                if data == target:
+                    self._identification_config_combo.setCurrentIndex(i)
+                    break
         self._identification_config_combo.blockSignals(False)
 
     def _read_pipeline_options(self) -> PipelineOptions:
@@ -962,22 +1036,43 @@ class Scibit(QWidget, IToolPlugin, metaclass=_ToolMeta):
         self._dirty = current.to_dict() != self._loaded_config_snapshot
         self._update_changed_indicator()
 
-    def _update_changed_indicator(self) -> None:
-        """Apply or remove the ``"(changed) "`` prefix on the loaded config's combo item."""
+    def _set_config_item_display(self, name: str, is_bundled: bool, is_dirty: bool) -> None:
+        """Set a combo item's display text for the given config entry.
+
+        Finds the item whose UserRole matches ``(name, is_bundled)`` and
+        rebuilds its text via :func:`_config_display_text`.  No-op when the
+        item is not found (e.g. combo not built yet).
+        """
         combo = self._identification_config_combo
-        if not combo or self._loaded_config_name is None:
+        if not combo:
             return
-        idx = combo.findData(self._loaded_config_name, Qt.ItemDataRole.UserRole)
+        target = (name, is_bundled)
+        idx = -1
+        for i in range(combo.count()):
+            if combo.itemData(i, Qt.ItemDataRole.UserRole) == target:
+                idx = i
+                break
         if idx < 0:
             return
-        new_text = (
-            f"(changed) {self._loaded_config_name}" if self._dirty else self._loaded_config_name
-        )
+        new_text = _config_display_text(name, is_bundled, is_dirty=is_dirty)
         if combo.itemText(idx) == new_text:
             return
         combo.blockSignals(True)
         combo.setItemText(idx, new_text)
         combo.blockSignals(False)
+
+    def _update_changed_indicator(self) -> None:
+        """Apply or remove the ``"(changed) "`` prefix on the loaded config's combo item.
+
+        Preserves any existing ``"(bundled) "`` prefix — the display text
+        is rebuilt from the stored ``(name, is_bundled)`` tuple plus the
+        current dirty flag, never from the bare name alone.
+        """
+        if self._loaded_config_name is None:
+            return
+        self._set_config_item_display(
+            self._loaded_config_name, self._loaded_config_bundled, self._dirty
+        )
 
     def _has_unconfirmed(self) -> bool:
         if self._running:
