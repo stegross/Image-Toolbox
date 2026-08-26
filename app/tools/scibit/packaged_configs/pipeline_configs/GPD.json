@@ -1,0 +1,64 @@
+{
+  "pipeline": "feature_based_alignment",
+  "pipeline_options": {
+    "identifier_pattern_preset": "Two uppercase letters + 2 digits (e.g. AA01, XD12, ZZ99)",
+    "manual_confirmation_required": true,
+    "confidence_threshold_percent": 98.0,
+    "debug_export_mode": "all"
+  },
+  "stages": {
+    "calibration_setup": {
+      "operator": "",
+      "parameters": {
+        "rotation_degrees": 90.0,
+        "invert_colors": false,
+        "downscale_factor": 20
+      }
+    },
+    "chip_region_detection": {
+      "operator": "OpenCVOperator",
+      "parameters": {
+        "threshold_block_size": 11,
+        "threshold_c": 2,
+        "morph_kernel_size": 5
+      }
+    },
+    "feature_based_alignment": {
+      "operator": "OpenCVOperator",
+      "parameters": {
+        "detector": "ORB",
+        "max_features": 300,
+        "match_ratio": 0.75,
+        "min_matches": 30
+      }
+    },
+    "identifier_region_detection": {
+      "operator": "EasyOCROperator",
+      "parameters": {}
+    },
+    "roi_preprocess": {
+      "operator": "OpenCVOperator",
+      "parameters": {
+        "clahe_enabled": true,
+        "clahe_clip_limit": 10.0,
+        "clahe_tile_grid_size": 8,
+        "adaptive_threshold_enabled": false,
+        "adaptive_threshold_method": "GAUSSIAN",
+        "adaptive_threshold_block_size": 11,
+        "adaptive_threshold_c": 2,
+        "adaptive_threshold_invert": false
+      }
+    },
+    "text_recognition": {
+      "operator": "PaddleOCROperator",
+      "parameters": {
+        "decoder": "greedy",
+        "rec_model": "server"
+      }
+    },
+    "validation": {
+      "operator": "",
+      "parameters": {}
+    }
+  }
+}

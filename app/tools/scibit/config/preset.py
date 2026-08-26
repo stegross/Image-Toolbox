@@ -107,44 +107,28 @@ class IdentifierPatternPresetRegistry:
     # ------------------------------------------------------------------
 
     @classmethod
-    def load(cls, path: Path) -> IdentifierPatternPresetRegistry:
-        """Load presets from a JSON file at *path*.
+    def from_data(cls, data: list) -> IdentifierPatternPresetRegistry:
+        """Build a registry from a parsed JSON array of preset dicts.
 
-        On any error (missing file, parse failure, invalid entry) the
-        registry falls back to containing only the default preset and logs
-        a warning.
+        Shared parsing/validation logic used by :meth:`load` (file path)
+        and the embedded-config loader (in-memory list).
 
         Parameters
         ----------
-        path : Path
-            Path to the JSON preset configuration file.
+        data : list
+            Parsed JSON array of preset entries (each a dict with
+            ``name``, ``regex`` and optional ``description``).
 
         Returns
         -------
         IdentifierPatternPresetRegistry
-            Registry populated with the file's presets (plus the default).
+            Registry populated with presets.
         """
-        if not path.exists():
-            _log.warning("Preset file not found: %s — using default preset only.", path)
-            return cls()
-
-        try:
-            with path.open(encoding="utf-8") as fh:
-                raw: list = json.load(fh)
-        except (OSError, json.JSONDecodeError) as exc:
-            _log.error("Failed to load preset file %s: %s", path, exc)
-            return cls()
-
-        if not isinstance(raw, list):
-            _log.error(
-                "Preset file %s must contain a JSON array, got %s.",
-                path,
-                type(raw).__name__,
-            )
-            return cls()
+        if not isinstance(data, list):
+            raise RuntimeError(f"Preset data must be a JSON array, got {type(data).__name__}.")
 
         presets: list[IdentifierPatternPreset] = []
-        for idx, entry in enumerate(raw):
+        for idx, entry in enumerate(data):
             try:
                 presets.append(
                     IdentifierPatternPreset(
@@ -155,14 +139,41 @@ class IdentifierPatternPresetRegistry:
                 )
             except (KeyError, TypeError) as exc:
                 _log.warning(
-                    "Skipping malformed preset entry at index %d in %s: %s",
+                    "Skipping malformed preset entry at index %d: %s",
                     idx,
-                    path,
                     exc,
                 )
 
-        _log.debug("Loaded %d preset(s) from %s (+ default).", len(presets), path)
+        _log.debug("Loaded %d preset(s).", len(presets))
         return cls(presets)
+
+    @classmethod
+    def load(cls, path: Path) -> IdentifierPatternPresetRegistry:
+        """Load presets from a JSON file on disk.
+
+        No fallback - if the file is missing, raise error.
+
+        Args:
+            path: Path to preset file.
+
+        Returns
+        -------
+            Registry populated with presets.
+
+        Raises
+        ------
+            RuntimeError: If the file is missing or corrupted.
+        """
+        if not path.exists():
+            raise RuntimeError(f"Preset resource not found: {path}.")
+
+        try:
+            with path.open(encoding="utf-8") as fh:
+                raw: list = json.load(fh)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"Failed to load preset file {path}: {exc}.") from exc
+
+        return cls.from_data(raw)
 
     # ------------------------------------------------------------------
     # Queries

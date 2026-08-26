@@ -40,6 +40,8 @@ class MainWindow(QMainWindow):
         Used to load per-tool configs and save them on shutdown.
     layout_persistence : LayoutPersistence
         Handles saving/restoring the dock layout between sessions.
+    user_config_dir : Path
+        User profile config directory.
     parent : QWidget | None
         Optional parent widget.
     """
@@ -50,6 +52,7 @@ class MainWindow(QMainWindow):
         role_manager: RoleManager,
         config_manager: ConfigManager,
         layout_persistence: LayoutPersistence,
+        user_config_dir: Path | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -57,6 +60,7 @@ class MainWindow(QMainWindow):
         self._role_manager = role_manager
         self._config_manager = config_manager
         self._layout_persistence = layout_persistence
+        self._user_config_dir = user_config_dir or (Path.home() / ".vi_toolbox" / "config")
 
         self.initialize()
 
@@ -156,7 +160,13 @@ class MainWindow(QMainWindow):
         display_name = tool_cls.name
         display_title = display_name if not allow_multiple else f"{display_name} ({instance_id})"
 
-        tool_instance = tool_cls(self._config_manager)
+        if cls_name == "Scibit":
+            tool_instance = tool_cls(
+                self._config_manager,
+                user_config_dir=self._user_config_dir,
+            )
+        else:
+            tool_instance = tool_cls(self._config_manager)
         tool_instance._assign_instance_id(instance_id)
         widget = tool_instance.create_widget(self)
         closable = getattr(tool_cls, "closable", True)

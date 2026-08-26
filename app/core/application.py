@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from app.core.config import ConfigManager
-from app.core.logging import initialize_logging
+from app.core.logging import get_logger, initialize_logging
 from app.core.roles import RoleManager
 from app.plugin.registry import ToolRegistry
 from app.shell.layout import LayoutPersistence
@@ -17,6 +17,8 @@ from app.shell.main_window import MainWindow
 
 # User-specific data directory for configs, logs, and layout state
 _APP_DATA_DIR = Path.home() / ".vi_toolbox"
+
+_log = get_logger("core.application")
 
 
 class Application:
@@ -45,12 +47,22 @@ class Application:
         self._initialize_logging()
         role_manager = self._check_roles()
         config_manager = self._initialize_config()
+
+        # User config root (for user-created pipeline configs, session
+        # state, layout, etc.)
+        user_root = self._get_user_config_root()
+        self._validate_bundled_configs()
+
         tool_registry = ToolRegistry()
 
-        layout_persistence = LayoutPersistence(state_file=_APP_DATA_DIR / "layout.state")
+        layout_persistence = LayoutPersistence(state_file=user_root / "layout.state")
 
         main_window = self._create_main_window(
-            tool_registry, role_manager, config_manager, layout_persistence
+            tool_registry,
+            role_manager,
+            config_manager,
+            layout_persistence,
+            user_config_dir=user_root,
         )
         main_window.show()
 
@@ -93,6 +105,15 @@ class Application:
         """
         return RoleManager(config_dir=_APP_DATA_DIR / "config")
 
+    def _get_user_config_root(self) -> Path:
+        """Determine the user profile config directory root.
+
+        Returns
+        -------
+            Path to the user config directory (``~/.vi_toolbox/config``).
+        """
+        return Path.home() / ".vi_toolbox" / "config"
+
     def _initialize_config(self) -> ConfigManager:
         """Initialise per-tool configuration management (REQ-HS-006).
 
@@ -103,12 +124,29 @@ class Application:
         """
         return ConfigManager(config_dir=_APP_DATA_DIR / "config")
 
+    def _validate_bundled_configs(self) -> None:
+        """Validate that bundled configs exist (warn if missing).
+
+        Bundled configs are loaded from the embedded module (frozen) or
+        the dev JSON files (source).  A missing or empty set indicates a
+        corrupted or incomplete bundle.
+        """
+        from app.core.resources import load_bundled_pipeline_configs
+
+        bundled = load_bundled_pipeline_configs()
+        if not bundled:
+            _log.warning("No bundled pipeline configs found.")
+            return
+
+        _log.info("Found %d bundled pipeline config(s)", len(bundled))
+
     def _create_main_window(
         self,
         tool_registry: ToolRegistry,
         role_manager: RoleManager,
         config_manager: ConfigManager,
         layout_persistence: LayoutPersistence,
+        user_config_dir: Path,
     ) -> MainWindow:
         """Instantiate and return the main application window.
 
@@ -122,6 +160,8 @@ class Application:
             Initialised config manager.
         layout_persistence : LayoutPersistence
             Layout state handler.
+        user_config_dir : Path
+            User profile config directory.
 
         Returns
         -------
@@ -133,4 +173,5 @@ class Application:
             role_manager=role_manager,
             config_manager=config_manager,
             layout_persistence=layout_persistence,
+            user_config_dir=user_config_dir,
         )

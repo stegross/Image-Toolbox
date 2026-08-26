@@ -81,6 +81,10 @@ select = [
     "UP",   # pyupgrade (modern Python syntax)
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# Generated file with JSON string literals that can't be line-wrapped.
+"app/tools/scibit/_bundled_configs.py" = ["E501"]
+
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"   # NumPy docstring convention (REQ-EC-006)
 
